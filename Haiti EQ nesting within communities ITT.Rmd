@@ -1,0 +1,1304 @@
+---
+title: "Haiti Earthquake data analysis"
+header-includes:
+- \usepackage{booktabs}
+- \usepackage{rotating}
+- \usepackage{longtable}
+- \usepackage{dcolumn}
+output:
+  pdf_document:
+    fig_crop: no
+  html_notebook: default
+  html_document:
+    df_print: paged
+  word_document: default
+geometry: margin=.5in
+---
+ 
+```{r}
+melt_data_suffix <- function(var_name) {
+  new_var <- vector(mode = "numeric", length = nrow(data))
+  new_var[data$timePoint == 1] <- as.numeric(data[[paste0(var_name, '1')]][data$timePoint == 1])
+  new_var[data$timePoint == 2] <- as.numeric(data[[paste0(var_name, '2')]][data$timePoint == 2])
+  new_var[data$timePoint == 3] <- as.numeric(data[[paste0(var_name, '3')]][data$timePoint == 3])
+  return(new_var)
+}
+
+melt_data_prefix <- function(var_name) {
+  var_name <- substr(var_name, 3, nchar(var_name))
+  new_var <- vector(mode = "numeric", length = nrow(data))
+  new_var <- as.numeric(data[[paste0('T1', var_name)]])
+  new_var[data$timePoint == 1] <- as.numeric(data[[paste0('T1',var_name)]][data$timePoint == 1])
+  new_var[data$timePoint == 2] <- as.numeric(data[[paste0('T2',var_name)]][data$timePoint == 2])
+  new_var[data$timePoint == 3] <- as.numeric(data[[paste0('T3',var_name)]][data$timePoint == 3])
+  return(new_var)
+}
+
+reverse_melt <- function(data, var_name) {
+  data[[paste0(var_name,'1')]][data$timePoint_factor == "1"] <- as.numeric(data[[var_name]][data$timePoint_factor == "1"])
+  data[[paste0(var_name,'1')]][data$timePoint_factor == "2"] <- as.numeric(data[[var_name]][data$timePoint_factor == "1"])
+  data[[paste0(var_name,'1')]][data$timePoint_factor == "3"] <- as.numeric(data[[var_name]][data$timePoint_factor == "1"])
+  data[[paste0(var_name,'2')]][data$timePoint_factor == "1"] <- as.numeric(data[[var_name]][data$timePoint_factor == "2"])
+  data[[paste0(var_name,'2')]][data$timePoint_factor == "2"] <- as.numeric(data[[var_name]][data$timePoint_factor == "2"])
+  data[[paste0(var_name,'2')]][data$timePoint_factor == "3"] <- as.numeric(data[[var_name]][data$timePoint_factor == "2"])
+  data[[paste0(var_name,'3')]][data$timePoint_factor == "1"] <- as.numeric(data[[var_name]][data$timePoint_factor == "3"])
+  data[[paste0(var_name,'3')]][data$timePoint_factor == "2"] <- as.numeric(data[[var_name]][data$timePoint_factor == "3"])
+  data[[paste0(var_name,'3')]][data$timePoint_factor == "3"] <- as.numeric(data[[var_name]][data$timePoint_factor == "3"])
+  return(data)
+}
+
+count_nas <- function(df, time) {
+  result <- sapply(df[data$timePoint == time,], function(x) sum(is.na(x)))
+  return(result)
+}
+```
+
+```{r, message = FALSE, warnings = FALSE}
+library(haven)
+library(ggplot2)
+library(dplyr)
+library(scales)
+library(lme4)
+library(lsmeans)
+library(car)
+library(stringr)
+library(lmerTest)
+library(ordinal)
+library(RVAideMemoire)
+library(magrittr)
+library(xtable)
+library(texreg)
+library(reporttools)
+library(tidyr)
+library(Hmisc)
+library(PerformanceAnalytics)
+setwd("C:/Users/ajame/Dropbox/Haiti data")
+data <- read_dta("reshaped.dta")
+data$interventiongroup <- factor(data$intvscontrol, labels = c('Control', 'Intervention'))
+data$randomization <- factor(data$randomization, labels = c('Control', 'Intervention'))
+data$timePoint_factor <- factor(data$timePoint, labels = c('1','2','3'))
+data$T1ParticipantID <- factor(data$T1ParticipantID)
+data$Locationcode <- factor(data$Locationcode)
+data$gender <- factor(data$Finalgender, labels = c('Female', 'Male'))
+data$trainingparticipant[data$T1ParticipantID %in% c(9,17,62,70,74,125,126,186,193,198,253,98,149,153,262,332,389,442,449,453,454,457,286,294,298,345,470,11111111,242,270,281,318)] <- 1
+data$trainingparticipant[data$T1ParticipantID %in% c(14,16,21,25,121,166,246,321,322,446)] <- 0
+data$interventiongroup[data$T1ParticipantID %in% c(14,16,21,25,121,166,246,321,322,446) & data$randomization == "Intervention"] <- NA
+data$interventiongroup[data$T1ParticipantID %in% c(14,16,21,25,121,166,246,321,322,446) & data$randomization == "Control"] <- "Control"
+data$interventiongroup[data$T1ParticipantID %in% c(28, 221, 317)] <- NA
+data$trainingparticipant[is.na(data$trainingparticipant)] <- 0
+data$hasT1T2data[is.na(data$hasT1T2data)] <- 0
+
+data %<>% rename(T1HGMHfuturehelp = T1MHfuturehelp, T2HGMHfuturehelp = T2MHfuturehelp, T1FuncMen1 = T1FunMen1, Funcmean_T = FuncAvgT, T2SocCoh3floodreceivedhelp = T2SocCoh3disasterreceivedhelp, T3SocCoh3disprepreceivedhelp = T3SocCoh3)
+data$T1incomeopen <- str_replace_all(data$T1incomeopen, '\\$', 'dollars ')
+data$T1incomeopen <- str_replace_all(data$T1incomeopen, '&', '')
+data$T3interviewatT2whynot <- str_replace_all(data$T3interviewatT2whynot, ".*telef.*mwen te p.*", "telefn mwen te pdi")
+data$T1educationyears <- str_replace_all(data$T1educationyears, '(years|eme\\s).*','')
+data$T1educationyears <- car::recode(data$T1educationyears, "c('mwen pa ale lekol', 'I can\\'t learn', '1 month') = '0'; 
+                                     '6 months' = '0.5'; 
+                                     'preparatwa 1' = '1';
+                                     c('mwayen 2', 'segond') = '2';
+                                     '6 an' = '6'; '7 eme' = '7'; 
+                                     'LPP 8' = '8'; 
+                                     c('teminal', ' teminal') = '12'")
+data$T1educationyears <- as.numeric(data$T1educationyears)
+data$T1religion <- str_replace_all(data$T1religion, '^adv.*', 'Advantist')
+data$T1religion <- str_replace_all(data$T1religion, '^[bB](ap|at).*', 'Baptist')
+data$T1religion <- str_replace_all(data$T1religion, '^anyen.*', 'Anything')
+data$T1religion <- str_replace_all(data$T1religion, '^\\s?[cCkKl](ato|aro).*', 'Catholic')
+data$T1religion <- str_replace_all(data$T1religion, '.*reli(jy|gi)on.*', 'None')
+data$T1religion <- str_replace_all(data$T1religion, '^[pP][ea]n.*', 'Pentecostal')
+data$T1religion <- str_replace_all(data$T1religion, '^\\s?[pP][orwe][ot].*', 'Protestant')
+data$T1religion <- str_replace_all(data$T1religion, '^[vV]o.*', 'Voodoo')
+data$T1religion <- str_replace_all(data$T1religion, '.*mon$', 'Mormon')
+data$T1religion <- str_replace_all(data$T1religion, '.*(m gen yon religyon vre|m poko fe chwa|arme du salut).*', NA_character_)
+data$T1religion[data$T1religion == " "] <- NA
+data$T1religion <- car::recode(data$T1religion, "c('nan tout relijyon yo', 'toutis') = 'All'; 
+                                      c('dedieu', 'kretyen', 'chretyen', 'chretien', 'chretienne', 'corps de Christ', 'dedye', 'nazareen', 'egliz kretyenne', 'krisynis') = 'Christian'; 
+                                      'legliz de dieu' = 'Church of God';
+                                      'kretyen batis' = 'Baptist';
+                                      'katholik' = 'Catholic';
+                                      c('levanjil', 'Full gospel') = 'Gospel';
+                                      'temwn jehova' = 'Jehova\\'s Witness';
+                                      'methodiste' = 'Methodist'; 
+                                      'mizilman' = 'Muslim';
+                                      c('anyen menm', 'mwen pa gen religion', 'none') = 'None';
+                                      'okenn' = 'Other';
+                                      'rastafaya' = 'Rastafarian';
+                                      'lari a!' = 'The Street'")
+data$T1religion <- factor(data$T1religion)
+data$T1incomeopen <- factor(data$T1incomeopen)
+data$T1incomesourcesopen <- factor(data$T1incomesourcesopen)
+data$T1childrenopen <- as.numeric(data$T1childrenopen)
+data$T1childrenopen[data$T1childrenopen == 32] <- NA
+data$T1childrenliveopen <- as.numeric(data$T1childrenliveopen)
+data$T1childrenliveopen[data$T1childrenliveopen == 2000] <- NA
+data$T1childrenunder10open <- as.numeric(data$T1childrenunder10open)
+data$T1IDPcampwhereopen <- factor(data$T1IDPcampwhereopen)
+
+data$idioms1_T[data$idioms1_T == 6] <- 1
+data$idioms2_T[data$idioms2_T == 6] <- 1
+data$idioms3_T[data$idioms3_T == 6] <- 1
+
+data %<>% mutate(PTSD_T1 = select(., matches("^T1PTSD.*([0-9]|b)$"), -T1PTSD18) %>% rowMeans(na.rm = TRUE), 
+                 PTSD_T2 = select(., matches("^T2PTSD.*([0-9]|b)$"), -T2PTSD18) %>% rowMeans(na.rm = TRUE), 
+                 PTSD_T3 = select(., matches("^T3PTSD.*([0-9]|b)$"), -T3PTSD18) %>% rowMeans(na.rm = TRUE))
+
+data %<>% mutate(Anxmean_T1 = select(., starts_with("T1Anx")) %>% rowMeans(na.rm = TRUE),
+                 Anxmean_T2 = select(., starts_with("T2Anx")) %>% rowMeans(na.rm = TRUE),
+                 Anxmean_T3 = select(., starts_with("T3Anx")) %>% rowMeans(na.rm = TRUE))
+
+data %<>% mutate(
+  T1Cope7alc = max(T1Cope7alc, na.rm = TRUE) + 1 - T1Cope7alc,
+  T1Cope12drugs = max(T1Cope12drugs, na.rm = TRUE) + 1 - T1Cope12drugs,
+  T2Cope7alc = max(T2Cope7alc, na.rm = TRUE) + 1 - T2Cope7alc,
+  T2Cope12drugs = max(T2Cope12drugs, na.rm = TRUE) + 1 - T2Cope12drugs,
+  T3Cope7alc = max(T3Cope7alc, na.rm = TRUE) + 1 - T3Cope7alc,
+  T3Cope12drugs = max(T3Cope12drugs, na.rm = TRUE) + 1 - T3Cope12drugs)
+
+cope_var_names <- data %>% select(starts_with("T1Cope")) %>% names
+for(name in cope_var_names) {
+  data[[paste0(name)]][!is.na(data[[name]]) & data[[name]] > 1] <- data[[name]][!is.na(data[[name]]) & data[[name]] > 1] - 1   
+}
+
+cope_var_names <- data %>% select(starts_with("T2Cope")) %>% names
+for(name in cope_var_names) {
+  data[[paste0(name)]][!is.na(data[[name]]) & data[[name]] > 1] <- data[[name]][!is.na(data[[name]]) & data[[name]] > 1] - 1   
+}
+
+cope_var_names <- data %>% select(starts_with("T3Cope")) %>% names
+for(name in cope_var_names) {
+  data[[paste0(name)]][!is.na(data[[name]]) & data[[name]] > 1] <- data[[name]][!is.na(data[[name]]) & data[[name]] > 1] - 1   
+}
+
+data %<>% mutate(Cope_T1 = select(. , starts_with("T1Cope")) %>% rowMeans(na.rm = TRUE),
+                 Cope_T2 = select(. , starts_with("T2Cope")) %>% rowMeans(na.rm = TRUE),
+                 Cope_T3 = select(. , starts_with("T3Cope")) %>% rowMeans(na.rm = TRUE))
+
+data %<>% mutate(Fatalism_T1 = select(., T1DisFat1, T1DisFat2) %>% rowMeans,
+                 Fatalism_T2 = select(., T2DisFat1, T2DisFat2) %>% rowMeans,
+                 Fatalism_T3 = select(., T3DisFat1, T3DisFat2) %>% rowMeans)
+
+
+
+data %<>% mutate(Depmean_T1 = select(., starts_with("T1Dep")) %>% rowMeans(na.rm = TRUE),
+                 Depmean_T2 = select(., starts_with("T2Dep")) %>% rowMeans(na.rm = TRUE),
+                 Depmean_T3 = select(., starts_with("T3Dep")) %>% rowMeans(na.rm = TRUE))
+
+data %<>% mutate(SocCohmean_T1 = select(., starts_with('T1SocCoh1')) %>% rowMeans,
+                 SocCohmean_T2 = select(., starts_with('T2SocCoh1')) %>% rowMeans,
+                 SocCohmean_T3 = select(., starts_with('T3SocCoh1')) %>% rowMeans)
+
+data %<>% mutate(ChronStress_T1 = select(., starts_with('T1Stress')) %>% rowSums,
+                 ChronStress_T2 = select(., starts_with('T2Stress')) %>% rowSums,
+                 ChronStress_T3 = select(., starts_with('T3Stress')) %>% rowSums)
+
+
+data %<>% mutate(DisMHmean_T = select(., DisMH1AnxT, DisMH2DepT, DisMH3AvoidT) %>% rowMeans)
+#data %<>% mutate(Flood_exposure_T2 = select()
+
+data %<>% mutate(T2DP5Securedwelling_fixed = T2DP5SecuredwellingYES,
+                 T2DP7Divertwater_fixed = T2DP7DivertwaterYES,
+                 T3DP5Securedwelling_fixed = T3DP5SecuredwellingYES,
+                 T3DP7Divertwater_fixed = T3DP7DivertwaterYES)
+data$T2DP5Securedwelling_fixed[data$T2DP5SecuredwellingNO == 1] <- 0
+data$T2DP7Divertwater_fixed[data$T2DP7DivertwaterNO == 1] <- 0
+data$T3DP5Securedwelling_fixed[data$T3DP5SecuredwellingNO == 1] <- 0
+data$T3DP7Divertwater_fixed[data$T3DP7DivertwaterNO == 1] <- 0
+
+data$T2DP1bSupplykitseen <-  dplyr::recode(data$T2DP1bSupplykitseen, `10` = 0, `11` = 1)
+data$T1DP6Raiseditems[data$T1DP6Raiseditems == 3] <- mean(data$T1DP6Raiseditems[data$T1DP6Raiseditems != 3], na.rm = TRUE)
+data$T1DP12Talkchildren[data$T1DP12Talkchildren == 3] <- mean(data$T1DP12Talkchildren[data$T1DP12Talkchildren != 3], na.rm = TRUE)
+data$T2DP2Meds[data$T2DP2Meds == 5] <- mean(data$T2DP2Meds[data$T2DP2Meds != 5], na.rm = TRUE)
+data$T2DP3Foodwaterseen <-  dplyr::recode(data$T2DP3Foodwaterseen, `10` = 0, `9` = 1)
+data$T2DP4docsseen <-  dplyr::recode(data$T2DP4docsseen, `10` = 0, `9` = 1)
+data$T2DP5bSecuredwellingseen <- dplyr::recode(data$T2DP5bSecuredwellingseen, `10` = 0, `11` = 1)
+data$T2DP6Raiseditems[data$T2DP6Raiseditems == 3] <- mean(data$T2DP6Raiseditems[data$T2DP6Raiseditems != 3], na.rm = TRUE)
+data$T2DP6bRaiseditemsseen <-  dplyr::recode(data$T2DP6bRaiseditemsseen, `10` = 0, `9` = 1)
+data$T2DP7bDivertwaterseen <-  dplyr::recode(data$T2DP7bDivertwaterseen, `19` = 0, `20` = 1)
+data$T2DP22Whereexperts[data$T2DP22Whereexperts == 2] <- 0
+data$T3DP2Meds[data$T3DP2Meds == 5] <- mean(data$T3DP2Meds[data$T3DP2Meds != 5], na.rm = TRUE)
+data$T3DP6Raiseditems[data$T3DP6Raiseditems == 3] <- mean(data$T3DP6Raiseditems[data$T3DP6Raiseditems != 3], na.rm = TRUE)
+data$T3DP12Talkchildren[data$T3DP12Talkchildren == 3] <- mean(data$T3DP12Talkchildren[data$T3DP12Talkchildren != 3], na.rm = TRUE)
+
+data$T3DP1Supplykit[is.na(data$T3DP1Supplykit)] <- 0 
+data$T3DP2Meds[is.na(data$T3DP2Meds)] <- 0
+data$T3DP3Foodwater[is.na(data$T3DP3Foodwater)] <- 0
+data$T3DP20Safeplaceflood[is.na(data$T3DP20Safeplaceflood)] <- 0
+data$T3DP21riskysafecommunity[is.na(data$T3DP21riskysafecommunity)] <- 0
+data %<>% mutate(DP_cleaned_T1 = select(., T1DP1Supplykit, 
+                                          T1DP2Meds,
+                                          T1DP3Foodwater, 
+                                          T1DP4docs, 
+                                          T1DP5Securedwelling, 
+                                          T1DP6Raiseditems, 
+                                          T1DP7Divertwater, 
+                                          T1DP8Removedobjects, 
+                                          T1DP9Famplan, 
+                                          T1DP10Evacplan, 
+                                          T1DP11Reconnectplan, 
+                                          T1DP12Talkchildren, 
+                                          T1DP13Radiotvcomp, 
+                                          T1DP14Firstaid, 
+                                          T1DP15Cleanwater, 
+                                          T1DP16Disinfect, 
+                                          T1DP17Sanitation, 
+                                          T1DP20Safeplaceflood, 
+                                          T1DP21riskysafecommunity, 
+                                          T1DP22Helpfriends) %>% rowSums,
+                 DP_cleaned_T2 = select(., T2DP1Supplykit, 
+                                          T2DP2Meds, 
+                                          T2DP3Foodwater, 
+                                          T2DP4docs, 
+                                          T2DP5Securedwelling_fixed, 
+                                          T2DP6Raiseditems, 
+                                          T2DP7Divertwater_fixed, 
+                                          T2DP8Removedobjects, 
+                                          T2DP9Famplan, 
+                                          T2DP10Evacplan, 
+                                          T2DP11Reconnectplan, 
+                                          T2DP12Talkchildren, 
+                                          T2DP13Radiotvcomp, 
+                                          T2DP14Firstaid, 
+                                          T2DP15Cleanwater, 
+                                          T2DP16Disinfect, 
+                                          T2DP17Sanitation, 
+                                          T2DP18Safeplaceflood, 
+                                          T2DP19riskysafecommunity, 
+                                          T2DP20Helpfriends) %>% rowSums,
+                 DP_cleaned_T3 = select(., T3DP1Supplykit, 
+                                          T3DP2Meds, 
+                                          T3DP3Foodwater, 
+                                          T3DP4docs, 
+                                          T3DP5Securedwelling_fixed, 
+                                          T3DP6Raiseditems, 
+                                          T3DP7Divertwater_fixed, 
+                                          T3DP8Removedobjects, 
+                                          T3DP9Famplan, 
+                                          T3DP10Evacplan, 
+                                          T3DP11Reconnectplan, 
+                                          T3DP12Talkchildren, 
+                                          T3DP13Radiotvcomp, 
+                                          T3DP14Firstaid, 
+                                          T3DP15Cleanwater, 
+                                          T3DP16Disinfect, 
+                                          T3DP17Sanitation, 
+                                          T3DP20Safeplaceflood, 
+                                          T3DP21riskysafecommunity, 
+                                          T3DP22Helpfriends) %>% rowSums)
+
+data %<>% mutate(DP_cleaned_excludedItems_T1 = select(., T1DP2Meds,
+                                          T1DP3Foodwater, 
+                                          T1DP4docs, 
+                                          T1DP5Securedwelling, 
+                                          T1DP6Raiseditems, 
+                                          T1DP7Divertwater, 
+                                          T1DP8Removedobjects, 
+                                          T1DP9Famplan, 
+                                          T1DP10Evacplan, 
+                                          T1DP11Reconnectplan, 
+                                          T1DP12Talkchildren, 
+                                          T1DP13Radiotvcomp, 
+                                          T1DP14Firstaid, 
+                                          T1DP15Cleanwater, 
+                                          T1DP16Disinfect, 
+                                          T1DP17Sanitation, 
+                                          T1DP20Safeplaceflood, 
+                                          T1DP21riskysafecommunity, 
+                                          T1DP22Helpfriends) %>% rowSums,
+                 DP_cleaned_excludedItems_T2 = select(., T2DP2Meds, 
+                                          T2DP3Foodwater, 
+                                          T2DP4docs, 
+                                          T2DP5Securedwelling_fixed, 
+                                          T2DP6Raiseditems, 
+                                          T2DP7Divertwater_fixed, 
+                                          T2DP8Removedobjects, 
+                                          T2DP9Famplan, 
+                                          T2DP10Evacplan, 
+                                          T2DP11Reconnectplan, 
+                                          T2DP12Talkchildren, 
+                                          T2DP13Radiotvcomp, 
+                                          T2DP14Firstaid, 
+                                          T2DP15Cleanwater, 
+                                          T2DP16Disinfect, 
+                                          T2DP17Sanitation, 
+                                          T2DP18Safeplaceflood, 
+                                          T2DP19riskysafecommunity, 
+                                          T2DP20Helpfriends) %>% rowSums,
+                 DP_cleaned_excludedItems_T3 = select(., T3DP2Meds, 
+                                          T3DP3Foodwater, 
+                                          T3DP4docs, 
+                                          T3DP5Securedwelling_fixed, 
+                                          T3DP6Raiseditems, 
+                                          T3DP7Divertwater_fixed, 
+                                          T3DP8Removedobjects, 
+                                          T3DP9Famplan, 
+                                          T3DP10Evacplan, 
+                                          T3DP11Reconnectplan, 
+                                          T3DP12Talkchildren, 
+                                          T3DP13Radiotvcomp, 
+                                          T3DP14Firstaid, 
+                                          T3DP15Cleanwater, 
+                                          T3DP16Disinfect, 
+                                          T3DP17Sanitation, 
+                                          T3DP20Safeplaceflood, 
+                                          T3DP21riskysafecommunity, 
+                                          T3DP22Helpfriends) %>% rowSums)
+
+to_melt_suffix <- c('PTSD_T', 'Cope_T', 'Fatalism_T', 'Depmean_T', 'SocCohmean_T', 'Anxmean_T', 'DP_cleaned_T', 'DP_cleaned_excludedItems_T', 'ChronStress_T')
+
+for(i in to_melt_suffix) {
+  data[[i]] <- melt_data_suffix(i)
+}
+
+data$PTSD_T <- data$PTSD_T + 1
+
+#invisible(lapply(to_melt_suffix, function(x) data[[x]] <- melt_data_suffix(x)))
+cope_var_names <- data %>% select(starts_with("T1Cope")) %>% names
+to_melt_prefix <- c('T1HSMHDistressfault', 'T1HGDfuturedisprephelp', 'T1HGDfutureafterdishelp', 'T1HGMHfuturehelp', 'T1HGMHskillshelp', 'T1HSDfuturehelp', 'T1HSMHfuturehelp','T1HSMHfuturehelp1god','T1HSMHfuturehelp2pastor','T1HSMHfuturehelp3voodoo','T1HSMHfuturehelp4neighbor','T1HSMHfuturehelp5familyfriend','T1HSMHfuturehelp6hospital','T1HSMHfuturehelp7MHworker','T1HSMHfuturehelp8other','T1DisAtEQ1natural','T1DisAtEQ2godswill','T1DisAtEQ3voodoo','T1DisAtEQ4Badluck','T1DisAtEQ5faultHaitians','T1DisAtEQ6humanmade','T1DisAtflood1natural','T1DisAtflood2godswill','T1DisAtflood3voodoo','T1DisAtflood4badluck','T1DisAtflood5faulthaitians','T1DisAtflood6humanmade','T1DisAtpeople1natural','T1DisAtpeople2godswill','T1DisAtpeople3voodoo', 'T1DisAtpeople4badluck','T1DisAtpeople5faulthaitians','T1DisAtpeople6humanmade', 'T1Relig1', 'T1Relig2', 'T1Relig3', 'T1Relig4', cope_var_names)
+
+for(i in to_melt_prefix){
+  data[[paste0(substr(i,3,nchar(i)), '_T')]] <- melt_data_prefix(i) 
+}
+
+data %<>% mutate(DisAtNatural_mean_T1 = select(., T1DisAtEQ1natural,T1DisAtflood1natural,T1DisAtpeople1natural) %>% rowMeans,
+                 DisAtNatural_mean_T2 = select(., T2DisAtEQ1natural,T2DisAtflood1natural,T2DisAtpeople1natural) %>% rowMeans,
+                 DisAtNatural_mean_T = select(., DisAtEQ1natural_T,DisAtflood1natural_T,DisAtpeople1natural_T) %>% rowMeans,
+                 DisAtGodswill_mean_T = select(., DisAtEQ2godswill_T,DisAtflood2godswill_T,DisAtpeople2godswill_T) %>% rowMeans,
+                 DisAtVoodoo_mean_T = select(., DisAtEQ3voodoo_T,DisAtflood3voodoo_T,DisAtpeople3voodoo_T) %>% rowMeans,
+                 DisAtBadluck_mean_T = select(., DisAtEQ4Badluck_T,DisAtflood4badluck_T,DisAtpeople4badluck_T) %>% rowMeans,
+                 DisAtFaultHaitians_mean_T = select(., DisAtEQ5faultHaitians_T,DisAtflood5faulthaitians_T,DisAtpeople5faulthaitians_T) %>% rowMeans,
+                 DisAtHumanmade_mean_T = select(., DisAtEQ6humanmade_T, DisAtflood6humanmade_T,DisAtpeople6humanmade_T) %>% rowMeans)
+
+#invisible(lapply(to_melt_prefix, function(x) data[[paste0(substr(x, 3, nchar(x)), '_T')]] <- melt_data_prefix(x)))
+to_recode <- c('HSMHfuturehelp1god_T','HSMHfuturehelp2pastor_T','HSMHfuturehelp3voodoo_T','HSMHfuturehelp4neighbor_T','HSMHfuturehelp5familyfriend_T','HSMHfuturehelp6hospital_T','HSMHfuturehelp7MHworker_T','HSMHfuturehelp8other_T',"T1Married_A","T1IDPcamp","T1Aemployed", "T1school", "T2TrainReceivedagift", "T3attendedSLMtraining", "T3attendedSLMMHclinic", "T3InterviewatT2")
+T1_trauma_var_names <- data %>% filter(timePoint_factor == "1") %>%  select(starts_with('T1Trauma'), -contains('time'), -ends_with('R'), -ends_with('0'), -ends_with('1'), -T1Trauma21Harmdeathyoucaused, T1Trauma20Violdeathother, T1Trauma21Harmdeathyoucaused, -T1TRAUMAEXPOSUREPleaseindicatewh) %>% names
+T3_trauma_var_names <- data %>% select(starts_with("T3Trauma"), -ends_with('time'), -matches('R$'), -T3Trauma20Harmdeathyoucaused, T3Trauma19Violdeathother, T3Trauma20Harmdeathyoucaused ) %>% names
+
+to_recode <- c(to_recode, T1_trauma_var_names, T3_trauma_var_names)
+
+for(i in to_recode){
+  data[[i]][data[[i]] == 2] <- 0
+}
+
+data$T1Trauma1EQ[data$T1Trauma1EQ == 13] <- 1
+data$T1Trauma1EQ[data$T1Trauma1EQ == 14] <- 0
+
+data %<>% mutate(TraumaNatural_T1 = select(., T1_trauma_var_names[1:11]) %>% rowSums,
+                 TraumaOther_T1 = select(., T1_trauma_var_names[12:21]) %>% rowSums,
+                 TraumaNatural_T3 = select(., T3_trauma_var_names[1:10]) %>% rowSums,
+                 TraumaOther_T3 = select(., T3_trauma_var_names[11:20]) %>% rowSums)
+data$TraumaNatural_T3 <- data$TraumaNatural_T3 + 1
+data %<>% select(-traumaExposureT3, -traumaexpT3)
+
+#data %<>% mutate(TraumaNatural_T1 = select(., matches("^T1Trauma([1-9]|10|11)\\D.*[^R]$"), -ends_with("times")) %>% rowSums,
+ #                TraumaNatural_T3 = select(., matches("^T3Trauma([1-9]|10)\\D.*[^R]$")) %>% rowSums)
+
+
+data$T2TrainParticipatedintraining[data$T2TrainParticipatedintraining == 9] <- 1
+data$T2TrainParticipatedintraining[data$T2TrainParticipatedintraining == 10] <- 0
+data$T2Trainrate1 <- dplyr::recode(data$T2Trainrate1, `4` = 1, `6` = 2, `3` = 3, `2` = 4, `1` = 5)
+data$T2Trainrate2 <- dplyr::recode(data$T2Trainrate2, `4` = 1, `6` = 2, `3` = 3, `2` = 4, `1` = 5)
+data$T2Trainrate3 <- dplyr::recode(data$T2Trainrate3, `4` = 1, `6` = 2, `3` = 3, `2` = 4, `1` = 5)
+data$T2Trainrate4 <- dplyr::recode(data$T2Trainrate4, `4` = 1, `6` = 2, `3` = 3, `2` = 4, `1` = 5)
+data$T3SLMMHclinichelpfulness <- dplyr::recode(as.numeric(data$T3SLMMHclinichelpfulness), `6` = 1, `7` = 2, `8` = 3, `9` = 4, `10` = 5)
+data$T2HSMHfloodsadness <- dplyr::recode(as.numeric(data$T2HSMHfloodsadness), `6` = 0, `4` = 1, `3` = 4, `5` = 2, `8` = 3)
+data$T3HSMHfloodsadness <- dplyr::recode(as.numeric(data$T3HSMHfloodsadness), `6` = 0, `4` = 1, `3` = 4, `5` = 2, `8` = 3)
+data$HSMHfloodsadness_T <- data$T2HSMHfloodsadness
+data$HSMHfloodsadness_T[data$timePoint == 3] <- data$T3HSMHfloodsadness[data$timePoint == 3]
+data$HSMHfloodsadness_T[data$timePoint == 1] <- NA
+
+data$T2HSMHpasthelp[data$T2HSMHpasthelp == 10] <- 0
+data$T2HSMHpasthelp[data$T2HSMHpasthelp == 9] <- 1 
+data$T3HSMHpasthelp[data$T3HSMHpasthelp == 10] <- 0
+data$T3HSMHpasthelp[data$T3HSMHpasthelp == 9] <- 1 
+data$HSMHpasthelp_T <- data$T2HSMHpasthelp
+data$HSMHpasthelp_T[data$timePoint == 3] <- data$T3HSMHpasthelp[data$timePoint == 3]
+data$HSMHpasthelp_T[data$timePoint == 1] <- NA
+
+data$HGMHhelpedsomeonerecentflood_T2 <- data$T2HGMHhelpedsomeonerecentflood
+data$HGMHhelpedsomeonerecentflood_T2[data$timePoint != 2] <- NA
+data$HGMHhelpedsomeonerecentflood_T2[data$HGMHhelpedsomeonerecentflood_T2 == 9] <- 1
+data$HGMHhelpedsomeonerecentflood_T2[data$HGMHhelpedsomeonerecentflood_T2 == 10] <- 0
+
+data$SocCoh3floodreceivedhelp_T2 <- data$T2SocCoh3floodreceivedhelp
+data$SocCoh3floodreceivedhelp_T2[data$SocCoh3floodreceivedhelp_T2 == 10] <- 0
+data$SocCoh3floodreceivedhelp_T2[data$SocCoh3floodreceivedhelp_T2 == 11] <- 1
+data$SocCoh3floodreceivedhelp_T2[data$timePoint != 2] <- NA
+
+data$SocCoh3disprepreceivedhelp_T3 <- data$T3SocCoh3disprepreceivedhelp
+data$SocCoh3disprepreceivedhelp_T3[data$SocCoh3disprepreceivedhelp_T3 == 10] <- 0
+data$SocCoh3disprepreceivedhelp_T3[data$SocCoh3disprepreceivedhelp_T3 == 11] <- 1
+data$SocCoh3disprepreceivedhelp_T3[data$timePoint != 3] <- NA
+
+data$HSDpasthelp_T <- data$T2HSDpasthelp
+data$HSDpasthelp_T[data$timePoint == 3] <- data$T3HSDpasthelp[data$timePoint ==3]
+data$HSDpasthelp_T[data$timePoint == 1] <- NA
+
+data$HSDpasthelp_T[data$HSDpasthelp_T == 10] <- 1
+data$HSDpasthelp_T[data$HSDpasthelp_T == 11] <- 0
+data$HGDfuturedisprephelp_T[data$HGDfuturedisprephelp_T == 2] <- 0
+data$HGDfutureafterdishelp_T[data$HGDfutureafterdishelp_T == 2] <- 0
+data$HGMHfuturehelp_T[data$HGMHfuturehelp_T == 2] <- 0
+data$HGMHskillshelp_T[data$HGMHskillshelp_T == 2] <- 0
+data %<>% mutate(HelpGivingDisGen_T = select(., HGDfuturedisprephelp_T, HGDfutureafterdishelp_T) %>% rowSums,
+                 HelpGivingMental_T = select(., HGMHfuturehelp_T, HGMHskillshelp_T) %>% rowSums)
+
+cope_var_names <- paste0(substr(cope_var_names, 3, nchar(cope_var_names)),"_T")
+
+factor_dvs <- c('idioms1_T', 'idioms2_T', 'idioms3_T', 'DisMH1AnxT', 'DisMH2DepT', 'DisMH3AvoidT', 'HSMHDistressfault_T', 'HSDfuturehelp_T','HSMHfuturehelp_T','DisAtEQ1natural_T','DisAtEQ2godswill_T','DisAtEQ3voodoo_T','DisAtEQ4Badluck_T','DisAtEQ5faultHaitians_T','DisAtEQ6humanmade_T','DisAtflood1natural_T','DisAtflood2godswill_T','DisAtflood3voodoo_T','DisAtflood4badluck_T','DisAtflood5faulthaitians_T','DisAtflood6humanmade_T','DisAtpeople1natural_T','DisAtpeople2godswill_T','DisAtpeople3voodoo_T','DisAtpeople4badluck_T','DisAtpeople5faulthaitians_T','DisAtpeople6humanmade_T', 'HSMHfloodsadness_T', 'Relig1_T', 'Relig2_T', 'Relig3_T', 'Relig4_T', cope_var_names) 
+data %<>% mutate_at(factor_dvs, funs(factor(.)))
+
+# these variables necessary for mediation analyses conducted in STATA
+data %<>% reverse_melt('Funcmean_T')
+data %<>% mutate(Depmean_delta_T1T2 = Depmean_T2 - Depmean_T1, 
+                 PTSD_delta_T1T2 = PTSD_T2 - PTSD_T1, 
+                 Anxmean_delta_T1T2 = Anxmean_T2 - Anxmean_T1,
+                 Funcmean_delta_T1T2 = Funcmean_T2 - Funcmean_T1,
+                 DP_cleaned_delta_T1T2 = DP_cleaned_T2 - DP_cleaned_T1,
+                 SocCohmean_delta_T1T2 = SocCohmean_T2 - SocCohmean_T1,
+                 DisAtNatural_delta_T1T2 = DisAtNatural_mean_T2 - DisAtNatural_mean_T1)
+
+#filtered <- data %>% filter(trainingControl == 1 & !is.na(interventiongroup)) 
+data$interventiongroup <- data$randomization
+filtered <- data 
+
+#write_dta(filtered, 'C:/Users/ajame/Dropbox/Haiti data/ITT.dta', version = 14)
+#write_sav(filtered %>% filter(timePoint_factor == "1") %>% select(interventiongroup, Depmean_delta_T1T2, PTSD_delta_T1T2, Anxmean_delta_T1T2, Funcmean_delta_T1T2, DP_cleaned_delta_T1T2, SocCohmean_delta_T1T2, DisAtNatural_delta_T1T2) %>% mutate(interventiongroup = as.numeric(interventiongroup) - 1), 'C:/Users/ajame/Dropbox/Haiti data/ITT mediation.sav')
+```
+
+
+
+First let's get descriptive statistics for time 1 data to look at distributions in intervention vs control groups (which should be similar).  First we will do this with all subjects, afterwards we will repeat with only our filtered dataset containing subjects that have data at times 1 and 2 and subjects who, if assigned, participated in the intervention / training.
+
+
+```{r}
+T1_randomization <- data %>% filter(timePoint_factor == "1") %>% select(randomization) %>% as.data.frame
+
+T1_chron_stress_vars <- data %>% filter(timePoint_factor == "1") %>% select(starts_with('T1Stress'))
+
+T1_trauma_vars <- data %>% filter(timePoint_factor == "1") %>%  select(starts_with('T1Trauma'), -contains('time'), -ends_with('R'), -ends_with('0'), -ends_with('1'), -T1Trauma21Harmdeathyoucaused, T1Trauma20Violdeathother, T1Trauma21Harmdeathyoucaused, -T1TRAUMAEXPOSUREPleaseindicatewh)  
+
+T1_scales <- data %>% filter(timePoint_factor == "1") %>% select(PTSD_T, Depmean_T, Anxmean_T, Funcmean_T, Cope_T, ChronStress_T1, TraumaNatural_T1, TraumaOther_T1, DP_cleaned_T, SocCohmean_T)
+T1_scales %<>% rename(Depsum_T = Depmean_T, PTSD_sum_T = PTSD_T, Anxsum_T = Anxmean_T)
+T1_scales %<>% mutate(Depsum_T = (Depsum_T-1) * 13, PTSD_sum_T = (PTSD_sum_T-1) * 34, Anxsum_T = Anxsum_T * 21)
+
+T1_demographics <- data %>% filter(timePoint_factor == "1") %>%  select(gender, T1Married_A, T1howlongliving  ,T1IDPcamp ,T1IDPcampwhereopen  ,T1Forhowlong  ,T1Aemployed ,T1jobopen,T1school,T1educationyears,T1religion)
+
+T1_demographics_nomimal <- T1_demographics %>% select_if(function(x) is.numeric(x) | is.factor(x)) %>% select(-T1educationyears)
+T1_demographics_continuous <- data %>% filter(timePoint_factor == "1") %>% select(T1welloff, T1Age, T1educationyears, T1childrenopen, T1childrenliveopen ,  T1childrenunder10open  )
+
+T1_demographics_income <- data %>% filter(timePoint_factor == "1") %>% select(T1incomeopen, T1incomesourcesopen)
+
+T1_DP_vars <- data %>% filter(timePoint_factor == "1") %>% select(T1DP1Supplykit, T1DP2Meds,T1DP3Foodwater, T1DP4docs, T1DP5Securedwelling, T1DP6Raiseditems, T1DP7Divertwater, T1DP8Removedobjects, T1DP9Famplan, T1DP10Evacplan, T1DP11Reconnectplan, T1DP12Talkchildren, T1DP13Radiotvcomp, T1DP14Firstaid, T1DP15Cleanwater, T1DP16Disinfect, T1DP17Sanitation, T1DP20Safeplaceflood, T1DP21riskysafecommunity, T1DP22Helpfriends)
+
+T2_DP_vars <- data %>% filter(timePoint_factor == "2") %>% select(T2DP1Supplykit, T2DP2Meds, T2DP3Foodwater, T2DP4docs, T2DP5Securedwelling_fixed, T2DP6Raiseditems, T2DP7Divertwater_fixed, T2DP8Removedobjects, T2DP9Famplan, T2DP10Evacplan, T2DP11Reconnectplan, T2DP12Talkchildren, T2DP13Radiotvcomp, T2DP14Firstaid, T2DP15Cleanwater, T2DP16Disinfect, T2DP17Sanitation, T2DP18Safeplaceflood, T2DP19riskysafecommunity, T2DP20Helpfriends)
+
+T3_DP_vars <- data %>% filter(timePoint_factor == "3") %>% select(T3DP1Supplykit, T3DP2Meds, T3DP3Foodwater, T3DP4docs, T3DP5Securedwelling_fixed, T3DP6Raiseditems, T3DP7Divertwater_fixed, T3DP8Removedobjects, T3DP9Famplan, T3DP10Evacplan, T3DP11Reconnectplan, T3DP12Talkchildren, T3DP13Radiotvcomp, T3DP14Firstaid, T3DP15Cleanwater, T3DP16Disinfect, T3DP17Sanitation, T3DP20Safeplaceflood, T3DP21riskysafecommunity, T3DP22Helpfriends) 
+
+```
+
+```{r, results = "asis"}
+tableNominal(vars = as.data.frame(T1_demographics_nomimal), group = T1_randomization[,1], print.pval = "fisher", cumsum = FALSE, longtable = TRUE, cap = "Whole dataset - Demographics at time 1 - descriptive statistics and Fisher's exact test p-values")
+tableContinuous(vars = as.data.frame(T1_demographics_continuous),  group = T1_randomization[,1], stats = c('n', 'min', 'q1', 'median', 'mean','q3', 'max', 's'), prec = 2,  print.pval = "anova", longtable = TRUE, cap = "Whole dataset - Demographics at time 1 - descriptive statistics and t-test p-values")
+tableContinuous(vars = as.data.frame(T1_scales), group = T1_randomization[,1], stats = c('n', 'min', 'q1', 'median', 'mean','q3', 'max', 's'), prec = 2,  print.pval = "anova", longtable = TRUE, cap = "Whole dataset - Scales at time 1 - descriptive statistics and t-test p-values")
+tableContinuous(vars = as.data.frame(T1_chron_stress_vars), group = T1_randomization[,1], stats = c('n', 'min', 'q1', 'median', 'mean','q3', 'max', 's'), prec = 2,  print.pval = "anova", longtable = TRUE, cap = "Whole dataset - Chronic stress items at time 1 - descriptive statistics and t-test p-values")
+tableNominal(vars = as.data.frame(T1_DP_vars), group = T1_randomization[,1], print.pval = "fisher", fisher.B = Inf, cumsum = FALSE, longtable = TRUE, cap = "Whole dataset - Disaster preparation items at time 1 - descriptive statistics and Fisher's exact test p-values")
+tableNominal(vars = as.data.frame(T1_trauma_vars), group = T1_randomization[,1], print.pval = "fisher", fisher.B = Inf, cumsum = FALSE, longtable = TRUE, cap = "Whole dataset - Trauma items at time 1 - descriptive statistics and Fisher's exact test p-values")
+tableNominal(vars = as.data.frame(T1_demographics_income), group = T1_randomization[,1], print.pval = "fisher", cumsum = FALSE, longtable = TRUE, cap = "Whole dataset - Demographics at time 1 - descriptive statistics and Fisher's exact test p-values")
+```
+
+Now again the same variables analyzed only in subjects that have data at time 1 and 2, and if assigned to, participated in the training program.
+
+
+```{r}
+T1_intervention <- filtered %>% filter(timePoint_factor == "1") %>% select(interventiongroup) %>% as.data.frame
+
+T1_chron_stress_vars <- filtered %>% filter(timePoint_factor == "1") %>% select(starts_with('T1Stress'))
+
+T1_trauma_vars <- filtered %>% filter(timePoint_factor == "1") %>%  select(starts_with('T1Trauma'), -contains('time'), -ends_with('R'), -ends_with('0'), -ends_with('1'), -T1Trauma21Harmdeathyoucaused, T1Trauma20Violdeathother, T1Trauma21Harmdeathyoucaused, -T1TRAUMAEXPOSUREPleaseindicatewh)  
+
+T1_scales <- filtered %>% filter(timePoint_factor == "1") %>% select(PTSD_T, Depmean_T, Anxmean_T, Funcmean_T, Cope_T, ChronStress_T1, TraumaNatural_T1, TraumaOther_T1, DP_cleaned_T, SocCohmean_T)
+T1_scales %<>% rename(Depsum_T = Depmean_T, PTSD_sum_T = PTSD_T, Anxsum_T = Anxmean_T)
+T1_scales %<>% mutate(Depsum_T = (Depsum_T-1) * 13, PTSD_sum_T = (PTSD_sum_T-1) * 34, Anxsum_T = Anxsum_T * 21)
+
+T1_demographics <- filtered %>% filter(timePoint_factor == "1") %>%  select(gender, T1Married_A,T1howlongliving  ,T1IDPcamp ,T1IDPcampwhereopen  ,T1Forhowlong  ,T1Aemployed ,T1jobopen,T1school,T1educationyears,T1religion)
+
+T1_demographics_nomimal <- T1_demographics %>% select_if(function(x) is.numeric(x) | is.factor(x)) %>% select(-T1educationyears)
+T1_demographics_continuous <- filtered %>% filter(timePoint_factor == "1") %>% select(T1welloff, T1Age, T1educationyears, T1childrenopen, T1childrenliveopen ,  T1childrenunder10open  )
+
+T1_demographics_income <- filtered %>% filter(timePoint_factor == "1") %>% select(T1incomeopen, T1incomesourcesopen)
+
+T1_DP_vars <- filtered %>% filter(timePoint_factor == "1") %>% select(T1DP1Supplykit, T1DP2Meds,T1DP3Foodwater, T1DP4docs, T1DP5Securedwelling, T1DP6Raiseditems, T1DP7Divertwater, T1DP8Removedobjects, T1DP9Famplan, T1DP10Evacplan, T1DP11Reconnectplan, T1DP12Talkchildren, T1DP13Radiotvcomp, T1DP14Firstaid, T1DP15Cleanwater, T1DP16Disinfect, T1DP17Sanitation, T1DP20Safeplaceflood, T1DP21riskysafecommunity, T1DP22Helpfriends)
+
+T2_DP_vars <- filtered %>% filter(timePoint_factor == "2") %>% select(T2DP1Supplykit, T2DP2Meds, T2DP3Foodwater, T2DP4docs, T2DP5Securedwelling_fixed, T2DP6Raiseditems, T2DP7Divertwater_fixed, T2DP8Removedobjects, T2DP9Famplan, T2DP10Evacplan, T2DP11Reconnectplan, T2DP12Talkchildren, T2DP13Radiotvcomp, T2DP14Firstaid, T2DP15Cleanwater, T2DP16Disinfect, T2DP17Sanitation, T2DP18Safeplaceflood, T2DP19riskysafecommunity, T2DP20Helpfriends)
+
+T3_DP_vars <- filtered %>% filter(timePoint_factor == "3") %>% select(T3DP1Supplykit, T3DP2Meds, T3DP3Foodwater, T3DP4docs, T3DP5Securedwelling_fixed, T3DP6Raiseditems, T3DP7Divertwater_fixed, T3DP8Removedobjects, T3DP9Famplan, T3DP10Evacplan, T3DP11Reconnectplan, T3DP12Talkchildren, T3DP13Radiotvcomp, T3DP14Firstaid, T3DP15Cleanwater, T3DP16Disinfect, T3DP17Sanitation, T3DP20Safeplaceflood, T3DP21riskysafecommunity, T3DP22Helpfriends) 
+
+```
+
+```{r, results = "asis"}
+tableNominal(vars = as.data.frame(T1_demographics_nomimal), group = T1_intervention[,1], print.pval = "fisher", cumsum = FALSE, longtable = TRUE, cap = "Reduced dataset -  Demographics at time 1 - descriptive statistics and Fisher's exact test p-values")
+tableContinuous(vars = as.data.frame(T1_demographics_continuous),  group = T1_intervention[,1], stats = c('n', 'min', 'q1', 'median', 'mean','q3', 'max', 's'), prec = 2,  print.pval = "anova", longtable = TRUE, cap = "Reduced dataset -  Demographics at time 1 - descriptive statistics and t-test p-values")
+tableContinuous(vars = as.data.frame(T1_scales), group = T1_intervention[,1], stats = c('n', 'min', 'q1', 'median', 'mean','q3', 'max', 's'), prec = 2,  print.pval = "anova", longtable = TRUE, cap = "Reduced dataset -  Scales at time 1 - descriptive statistics and t-test p-values")
+tableContinuous(vars = as.data.frame(T1_chron_stress_vars), group = T1_intervention[,1], stats = c('n', 'min', 'q1', 'median', 'mean','q3', 'max', 's'), prec = 2,  print.pval = "anova", longtable = TRUE, cap = "Reduced dataset -  Chronic stress items at time 1 - descriptive statistics and t-test p-values")
+tableNominal(vars = as.data.frame(T1_DP_vars), group = T1_intervention[,1], print.pval = "fisher", fisher.B = Inf, cumsum = FALSE, longtable = TRUE, cap = "Reduced dataset - Disaster preparation items at time 1 - descriptive statistics and Fisher's exact test p-values")
+tableNominal(vars = as.data.frame(T1_trauma_vars), group = T1_intervention[,1], print.pval = "fisher", fisher.B = Inf, cumsum = FALSE, longtable = TRUE, cap = "Reduced dataset -  Trauma items at time 1 - descriptive statistics and Fisher's exact test p-values")
+tableNominal(vars = as.data.frame(T1_demographics_income), group = T1_intervention[,1], print.pval = "fisher", cumsum = FALSE, longtable = TRUE, cap = "Reduced dataset - Demographics at time 1 - descriptive statistics and Fisher's exact test p-values")
+```
+
+Now we'll explore the qualitative data regarding whether and why, if not, a subject participated in the intervention.
+
+```{r, echo = FALSE}
+qual_participation_T2 <- data %>% filter(timePoint_factor == "2") %>% select(T2TrainParticipatedintraining, T2TrainDidnotattendtrainingwhyno,  T2TrainHowmanysessionsattended, T2TrainReceivedagift, T2TrainAjan, T2Trainrate1, T2Trainrate2, T2Trainrate3, T2Trainrate4)
+
+qual_participation_open_T2 <- data %>% filter(timePoint_factor == "2") %>% select(T2TrainDidnotattendtrainingwhyn0, T2TrainGiftuseful, T2Trainimproveopen)
+
+qual_participation_T3 <- data %>% filter(timePoint_factor == "3") %>% select(T3attendedotherdispreptraining, T3attendedotherdispreptrainingop, T3attendedSLMtraining, T3attendedSLMtrainingwhynot, T3attendedSLMMHclinic, T3SLMMHclinichelpfulness, T3SLMMHclinicopen, T3InterviewatT2)
+
+qual_participation_open_T3 <- data %>% filter(timePoint_factor == "3") %>% select(T3attendedSLMtrainingwhynotopen, T3interviewatT2whynot)
+qual_participation_open_T3$T3attendedSLMtrainingwhynotopen <- str_replace_all(qual_participation_open_T3$T3attendedSLMtrainingwhynotopen, '\\???', '')
+qual_participation_open_T3$T3interviewatT2whynot <- str_replace_all(qual_participation_open_T3$T3interviewatT2whynot, '\\???', '')
+```
+
+```{r, results = "asis"}
+tableNominal(vars = as.data.frame(qual_participation_T2), lab = "tabqualt2", longtable = TRUE, cumsum = FALSE, cap = "Descriptive statistics of questions related to participation at time 2")
+tableNominal(vars = as.data.frame(qual_participation_open_T2), lab = "tabqualt2open", longtable = TRUE, cumsum = FALSE, cap = "Descriptive statistics of questions related to participation at time 2 - open responses")
+tableNominal(vars = as.data.frame(qual_participation_T3), lab = "tabqualt3", longtable = TRUE, cumsum = FALSE, cap = "Descriptive statistics of questions related to participation at time 3")
+tableNominal(vars = as.data.frame(qual_participation_open_T3), lab = "tabqualt3open", longtable = TRUE, cumsum = FALSE, cap = "Descriptive statistics of questions related to participation at time 3 - open responses")
+#print(xtable(qual_participation_T2), type = "html")
+#print(xtable(qual_participation_open_T2), type = "html")
+#print(xtable(qual_participation_T3), type = "html")
+#print(xtable(qual_participation_open_T3), type = "html")
+```
+
+Now we'll focus on disaster preparedness items (irrespective of group assignment) to understand the variability in responses across different items.
+
+```{r, results = "asis"}
+
+tableNominal(vars = as.data.frame(T1_DP_vars), lab = "tabdp1", longtable = TRUE, cumsum = FALSE, cap = "Descriptive statistics of disaster preparation behaviors time 1 questions")
+
+tableNominal(vars = as.data.frame(T2_DP_vars), lab = "tabdp2", longtable = TRUE, cumsum = FALSE, cap = "Descriptive statistics of disaster preparation behaviors time 2 questions")
+
+tableNominal(vars = as.data.frame(T3_DP_vars), lab = "tabdp3", longtable = TRUE, cumsum = FALSE, cap = "Descriptive statistics of disaster preparation behaviors time 3 questions")
+```
+
+Now let's perform a Cronbach's alpha analysis on disaster preparedness items - we can use the alphas if item is omitted to detect outliers.
+
+```{r alphas}
+psych::alpha(x = T1_DP_vars, cumulative = TRUE)
+
+psych::alpha(x = T2_DP_vars, cumulative = TRUE)
+
+psych::alpha(x = T3_DP_vars, cumulative = TRUE)
+```
+
+Let's look at the distribution of the coping variables to see how suitable for analysis they are individually.  
+
+```{r}
+for(var in cope_var_names) {
+  print(ggplot(data, aes_string(x = var)) + geom_histogram(stat = "count"))
+}
+
+cope_var_names <- cope_var_names[c(1:6, 8:11, 14:17)]
+```
+
+It looks like the drugs, alcohol, and traditional healing questions are not well-distributed, but the others are fine for analysis.  We'll exclude those 3.
+
+Now we'll get alpha values for our *entire sample* at time 1 to assess the quality of the mental health and behavioral scales used in the survery.
+
+```{r}
+psych::alpha(data %>% filter(timePoint_factor == "1") %>% select(starts_with("T1Stress")))
+psych::alpha(data %>% filter(timePoint_factor == "1") %>% select(T1_trauma_var_names[1:11]))
+psych::alpha(data %>% filter(timePoint_factor == "1") %>% select(T1_trauma_var_names[12:21]))
+psych::alpha(data %>% filter(timePoint_factor == "1") %>% select(T1DP1Supplykit, T1DP2Meds,T1DP3Foodwater, T1DP4docs, T1DP5Securedwelling, T1DP6Raiseditems, T1DP7Divertwater, T1DP8Removedobjects, T1DP9Famplan, T1DP10Evacplan, T1DP11Reconnectplan, T1DP12Talkchildren, T1DP13Radiotvcomp, T1DP14Firstaid, T1DP15Cleanwater, T1DP16Disinfect, T1DP17Sanitation, T1DP20Safeplaceflood, T1DP21riskysafecommunity, T1DP22Helpfriends), cumulative = TRUE)
+psych::alpha(data %>% filter(timePoint_factor == "1") %>% select(starts_with("T1Dep")))
+psych::alpha(data %>% filter(timePoint_factor == "1") %>% select(matches("^T1PTSD.*([0-9]|b)$"), -T1PTSD18))
+psych::alpha(data %>% filter(timePoint_factor == "1") %>% select(starts_with("T1Anx")))
+psych::alpha(data %>% filter(timePoint_factor == "1") %>% select(T1FuncMen1, T1FuncMen2, T1FuncMen3, T1FuncMen4))
+psych::alpha(data %>% filter(timePoint_factor == "1") %>% select(T1FuncWom1, T1FuncWom2, T1FuncWom3, T1FuncWom4, T1FuncWom5))
+psych::alpha(data %>% filter(timePoint_factor == "1") %>% select(starts_with("T1SocCoh1")))
+psych::alpha(data %>% filter(timePoint_factor == "1") %>% select(HGDfuturedisprephelp_T, HGDfutureafterdishelp_T))
+psych::alpha(data %>% filter(timePoint_factor == "1") %>% select(HGMHfuturehelp_T, HGMHskillshelp_T))
+```
+
+We also want to examine test-retest reliability for our various scales by doing a simple Pearson correlation from time 1 to time 2 in untreated subjects.  We have to restructure our data using `tidyr::spread` to get it in the proper wide format.
+
+```{r}
+#chronic stress
+cor.test( ~ `1` + `2`, data = data %>% filter(timePoint_factor != "3" & interventiongroup == "Control") %>% select(ChronStress_T, timePoint_factor, T1ParticipantID) %>% spread(timePoint_factor, ChronStress_T))
+#natural trauma
+cor.test( ~ TraumaNatural_T1 + TraumaNatural_T3, data = data %>% filter(timePoint_factor == "1" & interventiongroup == "Control"))
+#other trauma
+cor.test( ~ TraumaOther_T1 + TraumaOther_T3, data = data %>% filter(timePoint_factor == "1" & interventiongroup == "Control"))
+#disaster preparedness
+cor.test( ~ `1` + `2`, data = data %>% filter(timePoint_factor != "3" & interventiongroup == "Control") %>% select(DP_cleaned_T, timePoint_factor, T1ParticipantID) %>% spread(timePoint_factor, DP_cleaned_T))
+#depression
+cor.test( ~ `1` + `2`, data = data %>% filter(timePoint_factor != "3" & interventiongroup == "Control") %>% select(Depmean_T, timePoint_factor, T1ParticipantID) %>% spread(timePoint_factor, Depmean_T))
+#ptsd
+cor.test( ~ `1` + `2`, data = data %>% filter(timePoint_factor != "3" & interventiongroup == "Control") %>% select(PTSD_T, timePoint_factor, T1ParticipantID) %>% spread(timePoint_factor, PTSD_T))
+#anxiety
+cor.test( ~ `1` + `2`, data = data %>% filter(timePoint_factor != "3" & interventiongroup == "Control") %>% select(Anxmean_T, timePoint_factor, T1ParticipantID) %>% spread(timePoint_factor, Anxmean_T))
+# functioning men
+cor.test( ~ `1` + `2`, data = data %>% filter(timePoint_factor != "3" & interventiongroup == "Control" & T1Funcgender == 1) %>% select(Funcmean_T, timePoint_factor, T1ParticipantID) %>% spread(timePoint_factor, Funcmean_T))
+# functioning women
+cor.test( ~ `1` + `2`, data = data %>% filter(timePoint_factor != "3" & interventiongroup == "Control" & T1Funcgender == 2) %>% select(Funcmean_T, timePoint_factor, T1ParticipantID) %>% spread(timePoint_factor, Funcmean_T))
+# functioning all
+cor.test( ~ `1` + `2`, data = data %>% filter(timePoint_factor != "3" & interventiongroup == "Control") %>% select(Funcmean_T, timePoint_factor, T1ParticipantID) %>% spread(timePoint_factor, Funcmean_T))
+#social cohesion
+cor.test( ~ `1` + `2`, data = data %>% filter(timePoint_factor != "3" & interventiongroup == "Control") %>% select(SocCohmean_T, timePoint_factor, T1ParticipantID) %>% spread(timePoint_factor, SocCohmean_T))
+# help giving disaster
+cor.test( ~ `1` + `2`, data = data %>% filter(timePoint_factor != "3" & interventiongroup == "Control") %>% select(HelpGivingDisGen_T, timePoint_factor, T1ParticipantID) %>% mutate(HelpGivingDisGen_T = as.numeric(HelpGivingDisGen_T)) %>% spread(timePoint_factor, HelpGivingDisGen_T))
+# help giving mental
+cor.test( ~ `1` + `2`, data = data %>% filter(timePoint_factor != "3" & interventiongroup == "Control") %>% select(HelpGivingMental_T, timePoint_factor, T1ParticipantID) %>% mutate(HelpGivingMental_T = as.numeric(HelpGivingMental_T)) %>% spread(timePoint_factor, HelpGivingMental_T))
+# help seeking disaster
+cor.test( ~ `1` + `2`, data = data %>% filter(timePoint_factor != "3" & interventiongroup == "Control") %>% select(HSDfuturehelp_T, timePoint_factor, T1ParticipantID) %>% mutate(HSDfuturehelp_T = as.numeric(HSDfuturehelp_T)) %>%  spread(timePoint_factor, HSDfuturehelp_T))
+# help seeking mental
+cor.test( ~ `1` + `2`, data = data %>% filter(timePoint_factor != "3" & interventiongroup == "Control") %>% select(HSMHfuturehelp_T, timePoint_factor, T1ParticipantID) %>% mutate(HSMHfuturehelp_T = as.numeric(HSMHfuturehelp_T)) %>% spread(timePoint_factor, HSMHfuturehelp_T))
+```
+
+
+Having done that, we can ask whether disaster preparedness is correlated with our mental health measures (a primary assumption of the intervention).
+
+```{r}
+rcorr(as.matrix(data %>% filter(timePoint_factor == "1") %>% select(DP_cleaned_T, Depmean_T, PTSD_T, Anxmean_T, Funcmean_T, SocCohmean_T)))
+chart.Correlation(data %>% filter(timePoint_factor == "1") %>% select(DP_cleaned_T, Depmean_T, PTSD_T, Anxmean_T, Funcmean_T, SocCohmean_T), histogram=TRUE, pch=19)
+
+```
+
+Finally, let's plot the % of people that respond yes in the summed measure across time points.
+
+
+```{r cache = TRUE}
+plot_line_bar <- function(dv, limits, theme_style = theme_grey(), title = "", position=c(.8825, .25), by=.5, logit=FALSE, caption = "", rnge = c(0,0), save = FALSE) {
+ 
+
+  if(is.factor(filtered[[dv]])) {
+    filtered[[paste0(dv, '_numeric')]] <- as.numeric(filtered[[dv]])
+    dv <- paste0(dv, '_numeric')
+  }
+  
+  breaks <- seq(limits[1], limits[2], by=by)
+  wrap_113 <- wrap_format(113)
+  
+  line <- ggplot(filtered[!is.na(filtered$interventiongroup),], aes_string(x="timePoint_factor", y=dv, group="interventiongroup", shape="interventiongroup")) +
+        stat_summary(geom="errorbar", fun.data=mean_se, fun.args=list(mult=1), width=.09, size=1, alpha=.8, aes(color=interventiongroup)) +
+        stat_summary(aes(color=interventiongroup), geom="line", fun.y="mean", size=1, alpha=.8, linetype=1) +
+        stat_summary(geom="point", fun.y="mean", size=4, aes(color=interventiongroup))  +
+        coord_cartesian(ylim=limits) +
+        scale_shape_discrete("") +
+        scale_color_discrete("",labels=c('Control', 'Intervention')) + 
+        labs(color="Condition", shape="Condition", x="Time point", y=title, caption = wrap_113(sprintf(caption, rnge[1], rnge[2]))) +
+        theme_style +
+        theme(
+            legend.position=position, 
+            plot.caption=element_text(hjust=0),
+            legend.box.just="left",
+            legend.background = element_rect(color = "transparent", fill = "transparent"),
+            legend.key = element_rect(color = "transparent", fill = "transparent"),
+            legend.title = element_blank()
+        )  
+  line
+  if(save) {
+    ggsave(paste0(title, '.pdf'), device=cairo_pdf, width = 7.5, height = 5)
+  }
+  print(line)
+}
+```
+
+
+```{r}
+limits <- c(8,16)
+theme <- theme_minimal()
+rnge <- round(range(filtered$DP_cleaned_T, na.rm = TRUE),0)
+caption = "20-item yes/no scale (range %d - %d), with greater values indicating greater engagement in disaster preparation behaviors"
+plot_line_bar("DP_cleaned_T", limits, theme, "Disaster Preparation Behaviors", logit=FALSE, rnge = rnge, by = 1, position=c(.8825, .1), caption = caption, save = TRUE)
+```
+
+# ```{r}
+# limits <- c(9,20)
+# theme <- theme_minimal()
+# rnge <- range(filtered$DPT_quick_fixed, na.rm = TRUE)
+# caption = "22-item yes/no scale (range %d - %d), with greater values indicating greater engagement in \ndisaster preparation behaviors"
+# plot_line_bar("DPT_quick_fixed", limits, theme, "Disaster Preparation Behaviors", logit=FALSE, rnge = rnge, by = 1, position=c(.8825, .15), caption = caption, save = TRUE)
+# ```
+
+```{r, cache = TRUE}
+DPT_model <- lmer(DP_cleaned_T ~ interventiongroup * timePoint_factor + (1|T1ParticipantID), data = filtered)
+summary(DPT_model)
+Anova(DPT_model, type = "III")
+#summary(rbind(pairs(lsmeans::lsmeans(DPT_model, ~ interventiongroup * timePoint_factor), by = "timePoint_factor"))[2]) 
+DPT_MM <- lsmeans::lsmeans(DPT_model, ~ timePoint_factor * interventiongroup)
+summary(rbind(pairs(DPT_MM, by="interventiongroup")[c(1,3,4,6)], pairs(DPT_MM, by="timePoint_factor")))
+```
+
+```{r, cache = TRUE}
+DPT_excludedItems_model <- lmer(DP_cleaned_excludedItems_T ~ interventiongroup * timePoint_factor + (1|T1ParticipantID), data = filtered)
+summary(DPT_excludedItems_model)
+Anova(DPT_excludedItems_model, type = "III")
+#summary(rbind(pairs(lsmeans::lsmeans(DPT_model, ~ interventiongroup * timePoint_factor), by = "timePoint_factor"))[2]) 
+DPT_excludedItems_MM <- lsmeans::lsmeans(DPT_excludedItems_model, ~ timePoint_factor * interventiongroup)
+summary(rbind(pairs(DPT_excludedItems_MM, by="interventiongroup")[c(1,3,4,6)], pairs(DPT_excludedItems_MM, by="timePoint_factor")))
+```
+
+# ```{r, cache = TRUE}
+# DPT_model <- lmer(DPT_quick_fixed ~ interventiongroup * timePoint_factor + (1|T1ParticipantID), data = filtered)
+# summary(DPT_model)
+# Anova(DPT_model, type = "III")
+# #summary(rbind(pairs(lsmeans::lsmeans(DPT_model, ~ interventiongroup * timePoint_factor), by = "timePoint_factor"))[2]) 
+# DPT_MM <- lsmeans::lsmeans(DPT_model, ~ timePoint_factor * interventiongroup)
+# summary(rbind(pairs(DPT_MM, by="interventiongroup")[c(1,3,4,6)], pairs(DPT_MM, by="timePoint_factor")))
+# ```
+
+```{r, cache = TRUE}
+PTSD_T_model <- lmer(PTSD_T ~ interventiongroup * timePoint_factor + (1|Locationcode/T1ParticipantID), data = filtered)
+summary(PTSD_T_model)
+Anova(PTSD_T_model, type = "III")
+summary(rbind(pairs(lsmeans::lsmeans(PTSD_T_model, ~ interventiongroup * timePoint_factor), by = "timePoint_factor"))[2]) 
+```
+
+```{r, cache = TRUE}
+idioms1_T_model <- clmm(idioms1_T ~ interventiongroup * timePoint_factor + (1|Locationcode/T1ParticipantID), data = filtered)
+summary(idioms1_T_model)
+Anova(idioms1_T_model, type = "III")
+summary(rbind(pairs(lsmeans::lsmeans(idioms1_T_model, ~ interventiongroup * timePoint_factor), by = "timePoint_factor"))[2])
+```
+
+```{r, cache = TRUE}
+idioms2_T_model <- clmm(idioms2_T ~ interventiongroup * timePoint_factor + (1|Locationcode/T1ParticipantID), data = filtered)
+summary(idioms2_T_model)
+Anova(idioms2_T_model, type = "III")
+summary(rbind(pairs(lsmeans::lsmeans(idioms2_T_model, ~ interventiongroup * timePoint_factor), by = "timePoint_factor"))[2])
+```
+
+```{r, cache = TRUE}
+idioms3_T_model <- clmm(idioms3_T ~ interventiongroup * timePoint_factor + (1|T1ParticipantID), data = filtered)
+summary(idioms3_T_model)
+Anova(idioms3_T_model, type = "III")
+summary(rbind(pairs(lsmeans::lsmeans(idioms3_T_model, ~ interventiongroup * timePoint_factor), by = "timePoint_factor"))[2])
+```
+
+```{r, cache = TRUE}
+DisMHmean_T_model <- lmer(DisMHmean_T ~ interventiongroup * timePoint_factor + (1|Locationcode/T1ParticipantID), data = filtered)
+summary(DisMHmean_T_model)
+Anova(DisMHmean_T_model, type = "III")
+summary(rbind(pairs(lsmeans::lsmeans(DisMHmean_T_model, ~ interventiongroup * timePoint_factor), by = "timePoint_factor"))[2]) 
+```
+
+```{r, cache = TRUE}
+DisMH1AnxT_model <- clmm(DisMH1AnxT ~ interventiongroup * timePoint_factor + (1|Locationcode/T1ParticipantID), data = filtered)
+summary(DisMH1AnxT_model)
+Anova(DisMH1AnxT_model, type = "III")
+summary(rbind(pairs(lsmeans::lsmeans(DisMH1AnxT_model, ~ interventiongroup * timePoint_factor), by = "timePoint_factor"))[2])
+```
+
+```{r, cache = TRUE}
+DisMH2DepT_model <- clmm(DisMH2DepT ~ interventiongroup * timePoint_factor + (1|Locationcode/T1ParticipantID), data = filtered)
+summary(DisMH2DepT_model)
+Anova(DisMH2DepT_model, type = "III")
+summary(rbind(pairs(lsmeans::lsmeans(DisMH2DepT_model, ~ interventiongroup * timePoint_factor), by = "timePoint_factor"))[2])
+```
+
+```{r, cache = TRUE}
+DisMH3AvoidT_model <- clmm(DisMH3AvoidT ~ interventiongroup * timePoint_factor + (1|Locationcode/T1ParticipantID), data = filtered)
+summary(DisMH3AvoidT_model)
+Anova(DisMH3AvoidT_model, type = "III")
+summary(rbind(pairs(lsmeans::lsmeans(DisMH3AvoidT_model, ~ interventiongroup * timePoint_factor), by = "timePoint_factor"))[2])
+```
+
+```{r, cache = TRUE}
+Funcmean_T_model <- lmer(Funcmean_T ~ interventiongroup * timePoint_factor + (1|Locationcode/T1ParticipantID), data = filtered)
+summary(Funcmean_T_model)
+Anova(Funcmean_T_model, type = "III")
+summary(rbind(pairs(lsmeans::lsmeans(Funcmean_T_model, ~ interventiongroup * timePoint_factor), by = "timePoint_factor"))[2]) 
+```
+
+```{r, cache = TRUE}
+Depmean_T_model <- lmer(Depmean_T ~ interventiongroup * timePoint_factor + (1|T1ParticipantID), data = filtered)
+summary(Depmean_T_model)
+Anova(Depmean_T_model, type = "III")
+summary(rbind(pairs(lsmeans::lsmeans(Depmean_T_model, ~ interventiongroup * timePoint_factor), by = "timePoint_factor"))[2]) 
+```
+
+```{r, cache = TRUE}
+
+Anxmean_T_model <- lmer(Anxmean_T ~ interventiongroup * timePoint_factor + (1|Locationcode/T1ParticipantID), data = filtered)
+summary(Anxmean_T_model)
+Anova(Anxmean_T_model, type = "III")
+summary(rbind(pairs(lsmeans::lsmeans(Anxmean_T_model, ~ interventiongroup * timePoint_factor), by = "timePoint_factor"))[2]) 
+```
+
+```{r, cache = TRUE}
+Cope_T_model <- lmer(Cope_T ~ interventiongroup * timePoint_factor + (1|T1ParticipantID), data = filtered)
+summary(Cope_T_model)
+Anova(Cope_T_model, type = "III")
+summary(rbind(pairs(lsmeans::lsmeans(Cope_T_model, ~ interventiongroup * timePoint_factor), by = "timePoint_factor"))[2]) 
+```
+
+```{r cope_items, cache = TRUE}
+cope_models <- lapply(cope_var_names, function(x) clmm(as.formula(paste0(x, ' ~ interventiongroup * timePoint_factor + (1|T1ParticipantID)')), data = filtered))
+cope_models[[1]] <- update(cope_models[[1]], . ~ interventiongroup * timePoint_factor + (1|Locationcode/T1ParticipantID))
+cope_models[[2]] <- update(cope_models[[2]], . ~ interventiongroup * timePoint_factor + (1|Locationcode/T1ParticipantID))
+cope_models[[14]] <- update(cope_models[[14]], . ~ interventiongroup * timePoint_factor + (1|Locationcode/T1ParticipantID))
+```
+
+
+```{r, cache = TRUE}
+SocCohmean_T_model <- lmer(SocCohmean_T ~ interventiongroup * timePoint_factor + (1|Locationcode/T1ParticipantID), data = filtered)
+summary(SocCohmean_T_model)
+Anova(SocCohmean_T_model, type = "III")
+summary(rbind(pairs(lsmeans::lsmeans(SocCohmean_T_model, ~ interventiongroup * timePoint_factor), by = "timePoint_factor"))[2]) 
+```
+
+```{r, cache = TRUE}
+Fatalism_T_model <- lmer(Fatalism_T ~ interventiongroup * timePoint_factor + (1|Locationcode/T1ParticipantID), data = filtered)
+summary(Fatalism_T_model)
+Anova(Fatalism_T_model, type = "III")
+summary(rbind(pairs(lsmeans::lsmeans(Fatalism_T_model, ~ interventiongroup * timePoint_factor), by = "timePoint_factor"))[2]) 
+```
+
+```{r, cache = TRUE}
+HGMHhelpedsomeonerecentflood_T2_model <- glmer(HGMHhelpedsomeonerecentflood_T2 ~ interventiongroup + (1|Locationcode), data = filtered, family = "binomial")
+summary(HGMHhelpedsomeonerecentflood_T2_model)
+```
+
+```{r, cache = TRUE}
+HSDpasthelp_T_model <- glmer(HSDpasthelp_T ~ interventiongroup * timePoint_factor + (1|T1ParticipantID), data = filtered, family = "binomial")
+summary(HSDpasthelp_T_model)
+summary(rbind(pairs(lsmeans::lsmeans(HSDpasthelp_T_model, ~ interventiongroup * timePoint_factor), by = "timePoint_factor"))[1])
+HSDpasthelp_T_ME_model <- glmer(HSDpasthelp_T ~ timePoint_factor + interventiongroup + (1|T1ParticipantID), data = filtered, family = "binomial")
+summary(HSDpasthelp_T_ME_model)
+```
+
+```{r, cache = TRUE}
+SocCoh3floodreceivedhelp_T2_model <- glm(SocCoh3floodreceivedhelp_T2 ~ interventiongroup, data = filtered, family = "binomial")
+summary(SocCoh3floodreceivedhelp_T2_model)
+SocCoh3disprepreceivedhelp_T3_model <- glm(SocCoh3disprepreceivedhelp_T3 ~ interventiongroup, data = filtered, family = "binomial")
+summary(SocCoh3disprepreceivedhelp_T3_model)
+```
+
+```{r, cache = TRUE}
+HSMHfloodsadness_T_model <- clmm(HSMHfloodsadness_T ~ interventiongroup * timePoint_factor + (1|T1ParticipantID), data = filtered)
+summary(HSMHfloodsadness_T_model)
+summary(rbind(pairs(lsmeans::lsmeans(HSMHfloodsadness_T_model, ~ interventiongroup * timePoint_factor), by = "timePoint_factor"))[1])
+HSMHfloodsadness_T_ME_model <- clmm(HSMHfloodsadness_T ~  timePoint_factor + interventiongroup + (1|T1ParticipantID), data = filtered)
+summary(HSMHfloodsadness_T_ME_model)
+```
+
+```{r, cache = TRUE}
+HSMHpasthelp_T_model <- glmer(HSMHpasthelp_T ~ interventiongroup * timePoint_factor + (1|T1ParticipantID), data = filtered, family = "binomial")
+summary(HSMHpasthelp_T_model)
+HSMHpasthelp_T_ME_model <- glmer(HSMHpasthelp_T ~ timePoint_factor + interventiongroup + (1|T1ParticipantID), data = filtered, family = "binomial")
+summary(HSMHpasthelp_T_ME_model)
+```
+
+```{r, cache = TRUE}
+HSMHDistressfault_T_model <- clmm(HSMHDistressfault_T ~ interventiongroup * timePoint_factor + (1|T1ParticipantID), data = filtered)
+summary(HSMHDistressfault_T_model)
+Anova(HSMHDistressfault_T_model, type = "III")
+summary(rbind(pairs(lsmeans::lsmeans(HSMHDistressfault_T_model, ~ interventiongroup * timePoint_factor), by = "timePoint_factor"))[2]) 
+```
+
+```{r, cache = TRUE}
+HelpGivingDisGen_T_model <- glmer(cbind(HelpGivingDisGen_T, 2-HelpGivingDisGen_T) ~ interventiongroup * timePoint_factor + (1|T1ParticipantID), data=filtered, family="binomial")
+summary(HelpGivingDisGen_T_model)
+Anova(HelpGivingDisGen_T_model, type = "III")
+summary(rbind(pairs(lsmeans::lsmeans(HelpGivingDisGen_T_model, ~ interventiongroup * timePoint_factor), by = "timePoint_factor"))[2])
+```
+
+```{r, cache = TRUE}
+HGDfuturedisprephelp_T_model <- glmer(HGDfuturedisprephelp_T ~ interventiongroup * timePoint_factor + (1|T1ParticipantID), data = filtered, family = "binomial")
+summary(HGDfuturedisprephelp_T_model)
+Anova(HGDfuturedisprephelp_T_model, type = "III")
+summary(rbind(pairs(lsmeans::lsmeans(HGDfuturedisprephelp_T_model, ~ interventiongroup * timePoint_factor), by = "timePoint_factor"))[2])
+```
+
+```{r, cache = TRUE}
+HGDfutureafterdishelp_T_model <- glmer(HGDfutureafterdishelp_T ~ interventiongroup * timePoint_factor + (1|T1ParticipantID), data = filtered, family = "binomial")
+summary(HGDfutureafterdishelp_T_model)
+Anova(HGDfutureafterdishelp_T_model, type = "III")
+summary(rbind(pairs(lsmeans::lsmeans(HGDfutureafterdishelp_T_model, ~ interventiongroup * timePoint_factor), by = "timePoint_factor"))[2])
+```
+
+```{r, cache = TRUE}
+HelpGivingMental_T_model <- glmer(cbind(HelpGivingMental_T, 2-HelpGivingMental_T) ~ interventiongroup * timePoint_factor + (1|T1ParticipantID), data=filtered, family="binomial")
+summary(HelpGivingMental_T_model)
+Anova(HelpGivingMental_T_model, type = "III")
+summary(rbind(pairs(lsmeans::lsmeans(HelpGivingMental_T_model, ~ interventiongroup * timePoint_factor), by = "timePoint_factor"))[2])
+```
+
+
+```{r, cache = TRUE}
+HGMHfuturehelp_T_model <- glmer(HGMHfuturehelp_T ~ interventiongroup * timePoint_factor + (1|T1ParticipantID), data = filtered, family = "binomial")
+summary(HGMHfuturehelp_T_model)
+Anova(HGMHfuturehelp_T_model, type = "III")
+summary(rbind(pairs(lsmeans::lsmeans(HGMHfuturehelp_T_model, ~ interventiongroup * timePoint_factor), by = "timePoint_factor"))[2])
+```
+
+
+```{r, cache = TRUE}
+HGMHskillshelp_T_model <- glmer(HGMHskillshelp_T ~ interventiongroup * timePoint_factor + (1|T1ParticipantID), data = filtered, family = "binomial")
+summary(HGMHskillshelp_T_model)
+Anova(HGMHskillshelp_T_model, type = "III")
+summary(rbind(pairs(lsmeans::lsmeans(HGMHskillshelp_T_model, ~ interventiongroup * timePoint_factor), by = "timePoint_factor"))[2])
+```
+
+```{r, cache = TRUE}
+HSDfuturehelp_T_model <- clmm(HSDfuturehelp_T ~ interventiongroup * timePoint_factor + (1|Locationcode/T1ParticipantID), data = filtered)
+summary(HSDfuturehelp_T_model)
+Anova(HSDfuturehelp_T_model, type = "III")
+summary(rbind(pairs(lsmeans::lsmeans(HSDfuturehelp_T_model, ~ interventiongroup * timePoint_factor), by = "timePoint_factor"))[2])
+```
+
+```{r, cache = TRUE}
+HSMHfuturehelp_T_model <- clmm(HSMHfuturehelp_T ~ interventiongroup * timePoint_factor + (1|Locationcode/T1ParticipantID), data = filtered)
+summary(HSMHfuturehelp_T_model)
+Anova(HSMHfuturehelp_T_model, type = "III")
+summary(rbind(pairs(lsmeans::lsmeans(HSMHfuturehelp_T_model, ~ interventiongroup * timePoint_factor), by = "timePoint_factor"))[2])
+```
+
+```{r, cache = TRUE}
+HSMHfuturehelp1god_T_model <- glmer(HSMHfuturehelp1god_T ~ interventiongroup * timePoint_factor + (1|T1ParticipantID), data = filtered, family = "binomial")
+summary(HSMHfuturehelp1god_T_model)
+Anova(HSMHfuturehelp1god_T_model, type = "III")
+summary(rbind(pairs(lsmeans::lsmeans(HSMHfuturehelp1god_T_model, ~ interventiongroup * timePoint_factor), by = "timePoint_factor"))[2])
+```
+
+```{r, cache = TRUE}
+HSMHfuturehelp2pastor_T_model <- glmer(HSMHfuturehelp2pastor_T ~ interventiongroup * timePoint_factor + (1|Locationcode/T1ParticipantID), data = filtered, family = "binomial")
+summary(HSMHfuturehelp2pastor_T_model)
+Anova(HSMHfuturehelp2pastor_T_model, type = "III")
+summary(rbind(pairs(lsmeans::lsmeans(HSMHfuturehelp2pastor_T_model, ~ interventiongroup * timePoint_factor), by = "timePoint_factor"))[2])
+```
+
+```{r, cache = TRUE}
+HSMHfuturehelp3voodoo_T_model <- glmer(HSMHfuturehelp3voodoo_T ~ interventiongroup * timePoint_factor + (1|T1ParticipantID), data = filtered, family = "binomial")
+summary(HSMHfuturehelp3voodoo_T_model)
+Anova(HSMHfuturehelp3voodoo_T_model, type = "III")
+summary(rbind(pairs(lsmeans::lsmeans(HSMHfuturehelp3voodoo_T_model, ~ interventiongroup * timePoint_factor), by = "timePoint_factor"))[2])
+```
+
+```{r, cache = TRUE}
+HSMHfuturehelp4neighbor_T_model <- glmer(HSMHfuturehelp4neighbor_T ~ interventiongroup * timePoint_factor + (1|T1ParticipantID), data = filtered, family = "binomial")
+summary(HSMHfuturehelp4neighbor_T_model)
+Anova(HSMHfuturehelp4neighbor_T_model, type = "III")
+summary(rbind(pairs(lsmeans::lsmeans(HSMHfuturehelp4neighbor_T_model, ~ interventiongroup * timePoint_factor), by = "timePoint_factor"))[2])
+```
+
+```{r, cache = TRUE}
+HSMHfuturehelp5familyfriend_T_model <- glmer(HSMHfuturehelp5familyfriend_T ~ interventiongroup * timePoint_factor + (1|T1ParticipantID), data = filtered, family = "binomial")
+summary(HSMHfuturehelp5familyfriend_T_model)
+Anova(HSMHfuturehelp5familyfriend_T_model, type = "III")
+summary(rbind(pairs(lsmeans::lsmeans(HSMHfuturehelp5familyfriend_T_model, ~ interventiongroup * timePoint_factor), by = "timePoint_factor"))[2])
+```
+
+```{r, cache = TRUE}
+HSMHfuturehelp6hospital_T_model <- glmer(HSMHfuturehelp6hospital_T ~ interventiongroup * timePoint_factor + (1|T1ParticipantID), data = filtered, family = "binomial")
+summary(HSMHfuturehelp6hospital_T_model)
+Anova(HSMHfuturehelp6hospital_T_model, type = "III")
+summary(rbind(pairs(lsmeans::lsmeans(HSMHfuturehelp6hospital_T_model, ~ interventiongroup * timePoint_factor), by = "timePoint_factor"))[2])
+```
+
+```{r, cache = TRUE}
+HSMHfuturehelp7MHworker_T_model <- glmer(HSMHfuturehelp7MHworker_T ~ interventiongroup * timePoint_factor + (1|T1ParticipantID), data = filtered, family = "binomial")
+summary(HSMHfuturehelp7MHworker_T_model)
+Anova(HSMHfuturehelp7MHworker_T_model, type = "III")
+summary(rbind(pairs(lsmeans::lsmeans(HSMHfuturehelp7MHworker_T_model, ~ interventiongroup * timePoint_factor), by = "timePoint_factor"))[2])
+```
+
+```{r, cache = TRUE}
+HSMHfuturehelp8other_T_model <- glmer(HSMHfuturehelp8other_T ~ interventiongroup * timePoint_factor + (1|T1ParticipantID), data = filtered, family = "binomial")
+summary(HSMHfuturehelp8other_T_model)
+Anova(HSMHfuturehelp8other_T_model, type = "III")
+summary(rbind(pairs(lsmeans::lsmeans(HSMHfuturehelp8other_T_model, ~ interventiongroup * timePoint_factor), by = "timePoint_factor"))[2])
+```
+
+```{r, cache = TRUE}
+DisAtNatural_mean_T_model <- lmer(DisAtNatural_mean_T ~ interventiongroup * timePoint_factor + (1|T1ParticipantID), data = filtered)
+summary(DisAtNatural_mean_T_model)
+Anova(DisAtNatural_mean_T_model, type = "III")
+summary(rbind(pairs(lsmeans::lsmeans(DisAtNatural_mean_T_model, ~ interventiongroup * timePoint_factor), by = "timePoint_factor"))[2])
+```
+
+
+```{r, cache = TRUE}
+DisAtGodswill_mean_T_model <- lmer(DisAtGodswill_mean_T ~ interventiongroup * timePoint_factor + (1|T1ParticipantID), data = filtered)
+summary(DisAtGodswill_mean_T_model)
+Anova(DisAtGodswill_mean_T_model, type = "III")
+summary(rbind(pairs(lsmeans::lsmeans(DisAtGodswill_mean_T_model, ~ interventiongroup * timePoint_factor), by = "timePoint_factor"))[2])
+```
+
+```{r, cache = TRUE}
+DisAtVoodoo_mean_T_model <- lmer(DisAtVoodoo_mean_T ~ interventiongroup * timePoint_factor + (1|Locationcode/T1ParticipantID), data = filtered)
+summary(DisAtVoodoo_mean_T_model)
+Anova(DisAtVoodoo_mean_T_model, type = "III")
+summary(rbind(pairs(lsmeans::lsmeans(DisAtVoodoo_mean_T_model, ~ interventiongroup * timePoint_factor), by = "timePoint_factor"))[2])
+```
+
+```{r, cache = TRUE}
+DisAtBadluck_mean_T_model <- lmer(DisAtBadluck_mean_T ~ interventiongroup * timePoint_factor + (1|Locationcode/T1ParticipantID), data = filtered)
+summary(DisAtBadluck_mean_T_model)
+Anova(DisAtBadluck_mean_T_model, type = "III")
+summary(rbind(pairs(lsmeans::lsmeans(DisAtBadluck_mean_T_model, ~ interventiongroup * timePoint_factor), by = "timePoint_factor"))[2])
+```
+
+```{r, cache = TRUE}
+DisAtFaultHaitians_mean_T_model <- lmer(DisAtFaultHaitians_mean_T ~ interventiongroup * timePoint_factor + (1|T1ParticipantID), data = filtered)
+summary(DisAtFaultHaitians_mean_T_model)
+Anova(DisAtFaultHaitians_mean_T_model, type = "III")
+summary(rbind(pairs(lsmeans::lsmeans(DisAtFaultHaitians_mean_T_model, ~ interventiongroup * timePoint_factor), by = "timePoint_factor"))[2])
+```
+
+```{r, cache = TRUE}
+DisAtHumanmade_mean_T_model <- lmer(DisAtHumanmade_mean_T ~ interventiongroup * timePoint_factor + (1|Locationcode/T1ParticipantID), data = filtered)
+summary(DisAtHumanmade_mean_T_model)
+Anova(DisAtHumanmade_mean_T_model, type = "III")
+summary(rbind(pairs(lsmeans::lsmeans(DisAtHumanmade_mean_T_model, ~ interventiongroup * timePoint_factor), by = "timePoint_factor"))[2])
+```
+
+
+
+```{r, cache = TRUE}
+DisAtEQ1natural_T_model <- clmm(DisAtEQ1natural_T ~ interventiongroup * timePoint_factor + (1|T1ParticipantID), data = filtered)
+summary(DisAtEQ1natural_T_model)
+Anova(DisAtEQ1natural_T_model, type = "III")
+summary(rbind(pairs(lsmeans::lsmeans(DisAtEQ1natural_T_model, ~ interventiongroup * timePoint_factor), by = "timePoint_factor"))[2])
+```
+
+```{r, cache = TRUE}
+DisAtEQ2godswill_T_model <- clmm(DisAtEQ2godswill_T ~ interventiongroup * timePoint_factor + (1|T1ParticipantID), data = filtered)
+summary(DisAtEQ2godswill_T_model)
+Anova(DisAtEQ2godswill_T_model, type = "III")
+summary(rbind(pairs(lsmeans::lsmeans(DisAtEQ2godswill_T_model, ~ interventiongroup * timePoint_factor), by = "timePoint_factor"))[2])
+```
+
+```{r, cache = TRUE}
+DisAtEQ3voodoo_T_model <- clmm(DisAtEQ3voodoo_T ~ interventiongroup * timePoint_factor + (1|T1ParticipantID), data = filtered)
+summary(DisAtEQ3voodoo_T_model)
+Anova(DisAtEQ3voodoo_T_model, type = "III")
+summary(rbind(pairs(lsmeans::lsmeans(DisAtEQ3voodoo_T_model, ~ interventiongroup * timePoint_factor), by = "timePoint_factor"))[2])
+```
+
+```{r, cache = TRUE}
+DisAtEQ4Badluck_T_model <- clmm(DisAtEQ4Badluck_T ~ interventiongroup * timePoint_factor + (1|T1ParticipantID), data = filtered)
+summary(DisAtEQ4Badluck_T_model)
+Anova(DisAtEQ4Badluck_T_model, type = "III")
+summary(rbind(pairs(lsmeans::lsmeans(DisAtEQ4Badluck_T_model, ~ interventiongroup * timePoint_factor), by = "timePoint_factor"))[2])
+```
+
+```{r, cache = TRUE}
+DisAtEQ5faultHaitians_T_model <- clmm(DisAtEQ5faultHaitians_T ~ interventiongroup * timePoint_factor + (1|T1ParticipantID), data = filtered)
+summary(DisAtEQ5faultHaitians_T_model)
+Anova(DisAtEQ5faultHaitians_T_model, type = "III")
+summary(rbind(pairs(lsmeans::lsmeans(DisAtEQ5faultHaitians_T_model, ~ interventiongroup * timePoint_factor), by = "timePoint_factor"))[2])
+```
+
+```{r, cache = TRUE}
+DisAtEQ6humanmade_T_model <- clmm(DisAtEQ6humanmade_T ~ interventiongroup * timePoint_factor + (1|T1ParticipantID), data = filtered)
+summary(DisAtEQ6humanmade_T_model)
+Anova(DisAtEQ6humanmade_T_model, type = "III")
+summary(rbind(pairs(lsmeans::lsmeans(DisAtEQ6humanmade_T_model, ~ interventiongroup * timePoint_factor), by = "timePoint_factor"))[2])
+```
+```{r, cache = TRUE}
+DisAtflood1natural_T_model <- clmm(DisAtflood1natural_T ~ interventiongroup * timePoint_factor + (1|T1ParticipantID), data = filtered)
+summary(DisAtflood1natural_T_model)
+Anova(DisAtflood1natural_T_model, type = "III")
+summary(rbind(pairs(lsmeans::lsmeans(DisAtflood1natural_T_model, ~ interventiongroup * timePoint_factor), by = "timePoint_factor"))[2])
+```
+
+```{r, cache = TRUE}
+DisAtflood2godswill_T_model <- clmm(DisAtflood2godswill_T ~ interventiongroup * timePoint_factor + (1|Locationcode/T1ParticipantID), data = filtered)
+summary(DisAtflood2godswill_T_model)
+Anova(DisAtflood2godswill_T_model, type = "III")
+summary(rbind(pairs(lsmeans::lsmeans(DisAtflood2godswill_T_model, ~ interventiongroup * timePoint_factor), by = "timePoint_factor"))[2])
+```
+
+```{r, cache = TRUE}
+DisAtflood3voodoo_T_model <- clmm(DisAtflood3voodoo_T ~ interventiongroup * timePoint_factor + (1|T1ParticipantID), data = filtered)
+summary(DisAtflood3voodoo_T_model)
+Anova(DisAtflood3voodoo_T_model, type = "III")
+summary(rbind(pairs(lsmeans::lsmeans(DisAtflood3voodoo_T_model, ~ interventiongroup * timePoint_factor), by = "timePoint_factor"))[2])
+```
+
+```{r, cache = TRUE}
+DisAtflood4badluck_T_model <- clmm(DisAtflood4badluck_T ~ interventiongroup * timePoint_factor + (1|T1ParticipantID), data = filtered)
+summary(DisAtflood4badluck_T_model)
+Anova(DisAtflood4badluck_T_model, type = "III")
+summary(rbind(pairs(lsmeans::lsmeans(DisAtflood4badluck_T_model, ~ interventiongroup * timePoint_factor), by = "timePoint_factor"))[2])
+```
+
+```{r, cache = TRUE}
+DisAtflood5faulthaitians_T_model <- clmm(DisAtflood5faulthaitians_T ~ interventiongroup * timePoint_factor + (1|T1ParticipantID), data = filtered)
+summary(DisAtflood5faulthaitians_T_model)
+Anova(DisAtflood5faulthaitians_T_model, type = "III")
+summary(rbind(pairs(lsmeans::lsmeans(DisAtflood5faulthaitians_T_model, ~ interventiongroup * timePoint_factor), by = "timePoint_factor"))[2])
+```
+
+```{r, cache = TRUE}
+DisAtflood6humanmade_T_model <- clmm(DisAtflood6humanmade_T ~ interventiongroup * timePoint_factor + (1|T1ParticipantID), data = filtered)
+summary(DisAtflood6humanmade_T_model)
+Anova(DisAtflood6humanmade_T_model, type = "III")
+summary(rbind(pairs(lsmeans::lsmeans(DisAtflood6humanmade_T_model, ~ interventiongroup * timePoint_factor), by = "timePoint_factor"))[2])
+```
+```{r, cache = TRUE}
+DisAtpeople1natural_T_model <- clmm(DisAtpeople1natural_T ~ interventiongroup * timePoint_factor + (1|T1ParticipantID), data = filtered)
+summary(DisAtpeople1natural_T_model)
+Anova(DisAtpeople1natural_T_model, type = "III")
+summary(rbind(pairs(lsmeans::lsmeans(DisAtpeople1natural_T_model, ~ interventiongroup * timePoint_factor), by = "timePoint_factor"))[2])
+```
+
+```{r, cache = TRUE}
+DisAtpeople2godswill_T_model <- clmm(DisAtpeople2godswill_T ~ interventiongroup * timePoint_factor + (1|T1ParticipantID), data = filtered)
+summary(DisAtpeople2godswill_T_model)
+Anova(DisAtpeople2godswill_T_model, type = "III")
+summary(rbind(pairs(lsmeans::lsmeans(DisAtpeople2godswill_T_model, ~ interventiongroup * timePoint_factor), by = "timePoint_factor"))[2])
+```
+
+<!-- # ```{r, cache = TRUE} -->
+<!-- # DisAtpeople3voodoo_T_model <- clmm(DisAtpeople3voodoo_T ~ interventiongroup * timePoint_factor + (1|T1ParticipantID), data = filtered) -->
+<!-- # summary(DisAtpeople3voodoo_T_model) -->
+<!-- # Anova(DisAtpeople3voodoo_T_model, type = "III") -->
+<!-- # summary(rbind(pairs(lsmeans::lsmeans(DisAtpeople3voodoo_T_model, ~ interventiongroup * timePoint_factor), by = "timePoint_factor"))[2]) -->
+<!-- # ``` -->
+
+```{r, cache = TRUE}
+DisAtpeople4badluck_T_model <- clmm(DisAtpeople4badluck_T ~ interventiongroup * timePoint_factor + (1|T1ParticipantID), data = filtered)
+summary(DisAtpeople4badluck_T_model)
+Anova(DisAtpeople4badluck_T_model, type = "III")
+summary(rbind(pairs(lsmeans::lsmeans(DisAtpeople4badluck_T_model, ~ interventiongroup * timePoint_factor), by = "timePoint_factor"))[2])
+```
+
+```{r, cache = TRUE}
+DisAtpeople5faulthaitians_T_model <- clmm(DisAtpeople5faulthaitians_T ~ interventiongroup * timePoint_factor + (1|T1ParticipantID), data = filtered)
+summary(DisAtpeople5faulthaitians_T_model)
+Anova(DisAtpeople5faulthaitians_T_model, type = "III")
+summary(rbind(pairs(lsmeans::lsmeans(DisAtpeople5faulthaitians_T_model, ~ interventiongroup * timePoint_factor), by = "timePoint_factor"))[2])
+```
+
+```{r, cache = TRUE}
+DisAtpeople6humanmade_T_model <- clmm(DisAtpeople6humanmade_T ~ interventiongroup * timePoint_factor + (1|Locationcode/T1ParticipantID), data = filtered)
+summary(DisAtpeople6humanmade_T_model)
+Anova(DisAtpeople6humanmade_T_model, type = "III")
+summary(rbind(pairs(lsmeans::lsmeans(DisAtpeople6humanmade_T_model, ~ interventiongroup * timePoint_factor), by = "timePoint_factor"))[2])
+```
+
+```{r relig_models, cache = TRUE}
+relig_models <- list()
+relig_var_names <- c('Relig1 - Voodoo', 'Relig2 - Voodoo private', 'Relig3 - church', 'Relig4 - private relig')
+relig_models[[1]] <- clmm(Relig1_T ~ interventiongroup * timePoint_factor + (1|T1ParticipantID), data = filtered)
+relig_models[[2]] <- clmm(Relig2_T ~ interventiongroup * timePoint_factor + (1|T1ParticipantID), data = filtered)
+relig_models[[3]] <- clmm(Relig3_T ~ interventiongroup * timePoint_factor + (1|Locationcode/T1ParticipantID), data = filtered)
+relig_models[[4]] <- clmm(Relig4_T ~ interventiongroup * timePoint_factor + (1|Locationcode/T1ParticipantID), data = filtered)
+```
+
+
+```{r models}
+models <- list(PTSD_T_model, DPT_model, DPT_excludedItems_model, idioms1_T_model, idioms2_T_model, idioms3_T_model,DisMHmean_T_model, DisMH1AnxT_model, DisMH2DepT_model, DisMH3AvoidT_model, Funcmean_T_model, Depmean_T_model, Anxmean_T_model, Cope_T_model, SocCohmean_T_model, Fatalism_T_model, HelpGivingDisGen_T_model, HGDfuturedisprephelp_T_model, HGDfutureafterdishelp_T_model, HelpGivingMental_T_model, HGMHfuturehelp_T_model, HGMHskillshelp_T_model, HSDfuturehelp_T_model, HSMHfuturehelp_T_model, HSMHDistressfault_T_model, HSMHfuturehelp1god_T_model, HSMHfuturehelp2pastor_T_model, HSMHfuturehelp3voodoo_T_model, HSMHfuturehelp4neighbor_T_model, HSMHfuturehelp5familyfriend_T_model, HSMHfuturehelp6hospital_T_model, HSMHfuturehelp7MHworker_T_model,HSMHfuturehelp8other_T_model,DisAtNatural_mean_T_model, DisAtGodswill_mean_T_model,  DisAtVoodoo_mean_T_model, DisAtBadluck_mean_T_model, DisAtFaultHaitians_mean_T_model, DisAtHumanmade_mean_T_model, DisAtEQ1natural_T_model, DisAtEQ2godswill_T_model,DisAtEQ3voodoo_T_model,DisAtEQ4Badluck_T_model,DisAtEQ5faultHaitians_T_model,DisAtEQ6humanmade_T_model,DisAtflood1natural_T_model,DisAtflood2godswill_T_model,DisAtflood3voodoo_T_model,DisAtflood4badluck_T_model,DisAtflood5faulthaitians_T_model,DisAtflood6humanmade_T_model,DisAtpeople1natural_T_model,DisAtpeople2godswill_T_model,DisAtpeople4badluck_T_model,DisAtpeople5faulthaitians_T_model,DisAtpeople6humanmade_T_model)
+dv_names <- c('PTSD', 'Disaster preparedness','DP - excluded items', 'Idioms 1 - loss control','Idioms 2 - many things on mind','Idioms 3 - sadness pity','Disaster-related mental health', 'Dis MH - anxiety', 'Dis MH - depressed', 'Dis MH - avoid', 'Functioning', 'Depression - ZLSI', 'Anxiety - BAI', 'Coping', 'Social cohesion', 'Fatalism', 'HG Dis Gen sum', 'HG Dis - future dis prep help', 'HG Dis - future after dis help', 'HG MH Sum', 'HG MH - future help', 'HG MH - have skills to help', 'HS Dis - future help', 'HS MH - future help','HS MH - distress fault', 'HSMH - from God', 'HSMH - from pastor', 'HSMH - from voodoo', 'HSMH - from neighbor', 'HSMH - from family or fnd',  'HSMH - from hospital', 'HSMH - from MH worker', 'HSMH - from other', "Dis attr mean - natural", "Dis attr mean - God's will", "Dis attr mean - voodoo", "Dis attr mean - bad luck", "Dis attr mean - fault Haitians", "Dis attr mean - human made", 'Dis attr - EQ - natural',"Dis attr - EQ - God's will",'Dis attr - EQ - voodoo','Dis attr - EQ - bad luck','Dis attr - EQ - fault Haitians', 'Dis attr - EQ - human made','Dis attr - Flood - natural',"Dis attr - Flood - God's will",'Dis attr - Flood - voodoo','Dis attr - Flood - bad luck', 'Dis attr - Flood - fault Haitians','Dis attr - Flood - human made','Dis attr - Killed - natural',"Dis attr - Killed - God's will",'Dis attr - Killed - bad luck','Dis attr - Killed - fault Haitians','Dis attr - Killed - human made')
+models_t2t3 <- list(HGMHhelpedsomeonerecentflood_T2_model, HSDpasthelp_T_model, HSDpasthelp_T_ME_model, SocCoh3floodreceivedhelp_T2_model, SocCoh3disprepreceivedhelp_T3_model, HSMHfloodsadness_T_model, HSMHfloodsadness_T_ME_model, HSMHpasthelp_T_model, HSMHpasthelp_T_ME_model)
+dv_names_t2t3 <- c('HG MH - helped someone recent flood - T2', 'HS Dis - past help - T2 T3', 'HS Dis - past help - T2 T3 ME', 'SocCoh - flood received help - T2', 'SocCoh - dis prep resp received help - T3', 'HS MH - flood sadness - T2 T3', 'HS MH - flood sadness - T2 T3 ME', 'HS MH - past help - T2 T3', 'HS MH - past help - T2 T3 ME')
+
+coefs_2 <- sapply(models, function(x) coef(summary(x))['interventiongroupIntervention:timePoint_factor2',1])
+se_2 <- sapply(models, function(x) coef(summary(x))['interventiongroupIntervention:timePoint_factor2',2])
+p_2 <- sapply(models, function(x) coef(summary(x))['interventiongroupIntervention:timePoint_factor2', ncol(coef(summary(x)))])
+d_2 <- vector(mode="numeric", length=length(coefs_2))
+
+coefs_3 <- sapply(models, function(x) coef(summary(x))['interventiongroupIntervention:timePoint_factor3',1])
+se_3 <- sapply(models, function(x) coef(summary(x))['interventiongroupIntervention:timePoint_factor3',2])
+p_3 <- sapply(models, function(x) coef(summary(x))['interventiongroupIntervention:timePoint_factor3', ncol(coef(summary(x)))])
+d_3 <- vector(mode="numeric", length=length(coefs_3))
+
+for(i in 1:length(coefs_2)){
+  if(class(models[[i]]) == "merModLmerTest") {
+    y <- getME(models[[i]], name = 'y')
+    X <- getME(models[[i]], name = 'X')
+    d_2[i] <- coefs_2[i] / sd(y[X[,'timePoint_factor2'] == 0 & X[,'timePoint_factor3'] == 0])
+    d_3[i] <- coefs_3[i] / sd(y[X[,'timePoint_factor2'] == 0 & X[,'timePoint_factor3'] == 0])
+  }
+  else {
+    d_2[i] <- NA
+    d_3[i] <- NA
+  }
+}
+
+models_df <- data.frame(row.names = dv_names, 'Time 1vs2' = coefs_2, 'SE 1vs2' = se_2, 'p 1vs2' = p_2, 'CohD 1vs2' = d_2, 'Time 1vs3' = coefs_3, 'SE 1vs3' = se_3, 'p 1vs3' = p_3, 'CohD 1vs3' = d_3)
+
+coefs_t2t3 <- sapply(models_t2t3, function(x) coef(summary(x))[nrow(coef(summary(x))),1])
+se_t2t3 <- sapply(models_t2t3, function(x) coef(summary(x))[nrow(coef(summary(x))),2])
+p_t2t3 <- sapply(models_t2t3, function(x) coef(summary(x))[nrow(coef(summary(x))),ncol(coef(summary(x)))])
+models_t2t3_df <- data.frame(row.names = dv_names_t2t3, 'Coefficient' = coefs_t2t3, 'Std error' = se_t2t3, 'P value' = p_t2t3)
+
+cope_relig_coefs_2 <- sapply(c(cope_models, relig_models), function(x) coef(summary(x))['interventiongroupIntervention:timePoint_factor2',1])
+cope_relig_se_2 <- sapply(c(cope_models, relig_models), function(x) coef(summary(x))['interventiongroupIntervention:timePoint_factor2',2])
+cope_relig_p_2 <- sapply(c(cope_models, relig_models), function(x) coef(summary(x))['interventiongroupIntervention:timePoint_factor2', ncol(coef(summary(x)))])
+
+cope_relig_coefs_3 <- sapply(c(cope_models, relig_models), function(x) coef(summary(x))['interventiongroupIntervention:timePoint_factor3',1])
+cope_relig_se_3 <- sapply(c(cope_models, relig_models), function(x) coef(summary(x))['interventiongroupIntervention:timePoint_factor3',2])
+cope_relig_p_3 <- sapply(c(cope_models, relig_models), function(x) coef(summary(x))['interventiongroupIntervention:timePoint_factor3', ncol(coef(summary(x)))])
+
+coping_relig_df <- data.frame(row.names = c(cope_var_names, relig_var_names), 'Time 1vs2' = cope_relig_coefs_2, 'SE 1vs2' = cope_relig_se_2, 'p 1vs2' = cope_relig_p_2, 'Time 1vs3' = cope_relig_coefs_3, 'SE 1vs3' = cope_relig_se_3, 'p 1vs3' = cope_relig_p_3)
+```
+
+```{r, results = "asis"}
+print(xtable(models_df, "Main scales - coefficients are intervention x time point = 2 and intervention x time point = 3 effects", auto = TRUE, digits = c(2,2,2,4,2,2,2,4,2)), type = "latex")
+print(xtable(models_t2t3_df, "Coefficients are intervention effects for models marked with only 1 time point or models designated as ME; intervention x time point = 3 effects otherwise", auto = TRUE, digits = c(2,2,2,4)), type = "latex")
+print(xtable(coping_relig_df, "Coping and religiosity items - coefficients are intervention x time point = 2 and intervention x time point = 3 effects", auto = TRUE, digits = c(2,2,2,4,2,2,4)), type = "latex")
+```
+
+
+```{r, results = "asis"}
+texreg(models, type = "html",  digits = 3, bold = .05, booktabs = TRUE, longtable = FALSE, sideways = TRUE, use.packages = FALSE, single.row = FALSE, custom.model.names = dv_names, leading.zero = TRUE, stars = c(0.05, 0.01, 0.001), custom.note = "* $p < 0.05$, ** $p < 0.01$, *** $p < 0.001$. Coefficients with $p < 0.05$ in \\textbf{bold}.  Results are presented as coefficient (standard error).",  include.aic = FALSE, include.bic = TRUE, include.dic = FALSE, include.loglik = FALSE, include.nobs = FALSE, include.groups = FALSE, include.variance = FALSE, custom.coef.map = list( 'timePoint_factor2' = 'Time point = 2', 'timePoint_factor3' = 'Time point = 3', 'interventiongroupIntervention' = 'Intervention', 'interventiongroupIntervention:timePoint_factor2' = 'Intervention x Time = 2', 'interventiongroupIntervention:timePoint_factor3' = 'Intervention x Time = 3'), omit.coef = "gender")
+```
+
+# ```{r, results = "asis"}
+# vars <- filtered %>% select(Depmean_T, PTSD_T, Funcmean_T, DisMH1AnxT, DisMH2DepT, DisMH3AvoidT, timePoint)
+# vars %<>% rename(Time = timePoint)
+# tableContinuous(vars = list(vars$Depmean_T, vars$PTSD_T, vars$Funcmean_T, as.numeric(vars$DisMH1AnxT), as.numeric(vars$DisMH2DepT), as.numeric(vars$DisMH3AvoidT)), group = vars$Time, stats = c('n', 'min', 'q1', 'median', 'mean','q3', 'max', 's'), cap = "Descriptive statistics" , nams = c('ZLSI', 'PTSD', 'Functioning', 'Dis MH - Anxiety', 'Dis MH - Depression', 'Dis MH - Avoid'), prec = 2)
+# ```
+
+% latex table generated in R 3.4.2 by xtable 1.8-2 package
+% Mon Oct 23 14:55:49 2017
+\begingroup\footnotesize
+\begin{longtable}{llrrrrrrr}
+ \textbf{Variable} & \textbf{Time point} & $\mathbf{n}$ & \textbf{Min} & $\mathbf{q_1}$ & $\mathbf{\widetilde{x}}$ & $\mathbf{\bar{x}}$ & $\mathbf{q_3}$ & \textbf{Max} \\ 
+  \hline
+ZLSI & 1 & 308 & 1 & 1.31 & 1.69 & 1.90 & 2.38 & 4.00 \\ 
+   & 2 & 308 & 1 & 1.15 & 1.54 & 1.73 & 2.15 & 3.92 \\ 
+   & 3 & 253 & 1 & 1.23 & 1.54 & 1.67 & 2.00 & 4.00 \\ 
+   \hline
+ & all &  & 1 & 1.23 & 1.62 & 1.77 & 2.15 & 4.00 \\ 
+   \hline
+PTSD & 1 & 308 & 1 & 1.23 & 1.72 & 1.99 & 2.62 & 4.38 \\ 
+   & 2 & 308 & 1 & 1.09 & 1.43 & 1.72 & 2.18 & 4.74 \\ 
+   & 3 & 253 & 1 & 1.06 & 1.50 & 1.75 & 2.24 & 4.62 \\ 
+   \hline
+ & all &  & 1 & 1.09 & 1.56 & 1.82 & 2.32 & 4.74 \\ 
+   \hline
+Functioning & 1 & 303 & 1 & 1.50 & 2.25 & 2.44 & 3.25 & 5.00 \\ 
+   & 2 & 304 & 1 & 1.24 & 2.25 & 2.38 & 3.20 & 5.00 \\ 
+   & 3 & 221 & 1 & 1.00 & 1.75 & 1.91 & 2.50 & 5.00 \\ 
+   \hline
+ & all &  & 1 & 1.20 & 2.20 & 2.28 & 3.00 & 5.00 \\ 
+   \hline
+Dis MH - Anxiety & 1 & 308 & 1 & 3.00 & 5.00 & 4.50 & 6.00 & 7.00 \\ 
+   & 2 & 308 & 1 & 2.00 & 3.00 & 3.45 & 5.00 & 7.00 \\ 
+   & 3 & 251 & 1 & 2.00 & 4.00 & 4.04 & 6.00 & 7.00 \\ 
+   \hline
+ & all &  & 1 & 2.00 & 4.00 & 3.99 & 6.00 & 7.00 \\ 
+   \hline
+Dis MH - Depression & 1 & 306 & 1 & 3.00 & 4.00 & 4.32 & 6.00 & 7.00 \\ 
+   & 2 & 308 & 1 & 2.00 & 2.00 & 3.07 & 5.00 & 7.00 \\ 
+   & 3 & 252 & 1 & 2.00 & 3.00 & 3.51 & 5.00 & 7.00 \\ 
+   \hline
+ & all &  & 1 & 2.00 & 4.00 & 3.64 & 5.00 & 7.00 \\ 
+   \hline
+Dis MH - Avoid & 1 & 308 & 1 & 2.00 & 3.00 & 3.40 & 5.00 & 7.00 \\ 
+   & 2 & 307 & 1 & 2.00 & 2.00 & 2.89 & 4.00 & 7.00 \\ 
+   & 3 & 252 & 1 & 1.00 & 3.00 & 3.14 & 5.00 & 7.00 \\ 
+   \hline
+ & all &  & 1 & 2.00 & 3.00 & 3.14 & 5.00 & 7.00 \\ 
+   \hline
+\hline
+\caption{Descriptive statistics} 
+\label{}
+\end{longtable}
+\endgroup
