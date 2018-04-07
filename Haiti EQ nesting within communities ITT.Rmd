@@ -143,6 +143,10 @@ data %<>% mutate(PTSD_T1 = select(., matches("^T1PTSD.*([0-9]|b)$"), -T1PTSD18) 
                  PTSD_T2 = select(., matches("^T2PTSD.*([0-9]|b)$"), -T2PTSD18) %>% rowMeans(na.rm = TRUE), 
                  PTSD_T3 = select(., matches("^T3PTSD.*([0-9]|b)$"), -T3PTSD18) %>% rowMeans(na.rm = TRUE))
 
+data %<>% mutate(PTSD_avoid_T1 = select(., T1PTSD5, T1PTSD6) %>% rowMeans,
+                 PTSD_avoid_T2 = select(., T2PTSD5, T2PTSD6) %>% rowMeans,
+                 PTSD_avoid_T3 = select(., T3PTSD5, T3PTSD6) %>% rowMeans)
+
 data %<>% mutate(Anxmean_T1 = select(., starts_with("T1Anx")) %>% rowMeans(na.rm = TRUE),
                  Anxmean_T2 = select(., starts_with("T2Anx")) %>% rowMeans(na.rm = TRUE),
                  Anxmean_T3 = select(., starts_with("T3Anx")) %>% rowMeans(na.rm = TRUE))
@@ -177,8 +181,6 @@ data %<>% mutate(Cope_T1 = select(. , starts_with("T1Cope")) %>% rowMeans(na.rm 
 data %<>% mutate(Fatalism_T1 = select(., T1DisFat1, T1DisFat2) %>% rowMeans,
                  Fatalism_T2 = select(., T2DisFat1, T2DisFat2) %>% rowMeans,
                  Fatalism_T3 = select(., T3DisFat1, T3DisFat2) %>% rowMeans)
-
-
 
 data %<>% mutate(Depmean_T1 = select(., starts_with("T1Dep")) %>% rowMeans(na.rm = TRUE),
                  Depmean_T2 = select(., starts_with("T2Dep")) %>% rowMeans(na.rm = TRUE),
@@ -344,7 +346,7 @@ data %<>% mutate(DP_cleaned_excludedItems_T1 = select(., T1DP2Meds,
                                           T3DP21riskysafecommunity, 
                                           T3DP22Helpfriends) %>% rowSums)
 
-to_melt_suffix <- c('PTSD_T', 'Cope_T', 'Fatalism_T', 'Depmean_T', 'SocCohmean_T', 'Anxmean_T', 'DP_cleaned_T', 'DP_cleaned_excludedItems_T', 'ChronStress_T')
+to_melt_suffix <- c('PTSD_T', 'PTSD_avoid_T', 'Cope_T', 'Fatalism_T', 'Depmean_T', 'SocCohmean_T', 'Anxmean_T', 'DP_cleaned_T', 'DP_cleaned_excludedItems_T', 'ChronStress_T')
 
 for(i in to_melt_suffix) {
   data[[i]] <- melt_data_suffix(i)
@@ -452,6 +454,7 @@ data %<>% mutate_at(factor_dvs, funs(factor(.)))
 data %<>% reverse_melt('Funcmean_T')
 data %<>% mutate(Depmean_delta_T1T2 = Depmean_T2 - Depmean_T1, 
                  PTSD_delta_T1T2 = PTSD_T2 - PTSD_T1, 
+                 PTSD_avoid_delta_T1T2 = PTSD_avoid_T2 - PTSD_avoid_T1,
                  Anxmean_delta_T1T2 = Anxmean_T2 - Anxmean_T1,
                  Funcmean_delta_T1T2 = Funcmean_T2 - Funcmean_T1,
                  DP_cleaned_delta_T1T2 = DP_cleaned_T2 - DP_cleaned_T1,
@@ -463,7 +466,7 @@ data$interventiongroup <- data$randomization
 filtered <- data 
 
 #write_dta(filtered, 'C:/Users/ajame/Dropbox/Haiti data/ITT.dta', version = 14)
-#write_sav(filtered %>% filter(timePoint_factor == "1") %>% select(interventiongroup, Depmean_delta_T1T2, PTSD_delta_T1T2, Anxmean_delta_T1T2, Funcmean_delta_T1T2, DP_cleaned_delta_T1T2, SocCohmean_delta_T1T2, DisAtNatural_delta_T1T2) %>% mutate(interventiongroup = as.numeric(interventiongroup) - 1), 'C:/Users/ajame/Dropbox/Haiti data/ITT mediation.sav')
+#write_sav(filtered %>% filter(timePoint_factor == "1") %>% select(interventiongroup, Depmean_delta_T1T2, PTSD_delta_T1T2, PTSD_avoid_delta_T1T2, Anxmean_delta_T1T2, Funcmean_delta_T1T2, DP_cleaned_delta_T1T2, SocCohmean_delta_T1T2, DisAtNatural_delta_T1T2) %>% mutate(interventiongroup = as.numeric(interventiongroup) - 1), 'C:/Users/ajame/Dropbox/Haiti data/ITT mediation.sav')
 ```
 
 
@@ -714,14 +717,6 @@ caption = "20-item yes/no scale (range %d - %d), with greater values indicating 
 plot_line_bar("DP_cleaned_T", limits, theme, "Disaster Preparation Behaviors", logit=FALSE, rnge = rnge, by = 1, position=c(.8825, .1), caption = caption, save = TRUE)
 ```
 
-# ```{r}
-# limits <- c(9,20)
-# theme <- theme_minimal()
-# rnge <- range(filtered$DPT_quick_fixed, na.rm = TRUE)
-# caption = "22-item yes/no scale (range %d - %d), with greater values indicating greater engagement in \ndisaster preparation behaviors"
-# plot_line_bar("DPT_quick_fixed", limits, theme, "Disaster Preparation Behaviors", logit=FALSE, rnge = rnge, by = 1, position=c(.8825, .15), caption = caption, save = TRUE)
-# ```
-
 ```{r, cache = TRUE}
 DPT_model <- lmer(DP_cleaned_T ~ interventiongroup * timePoint_factor + (1|T1ParticipantID), data = filtered)
 summary(DPT_model)
@@ -740,20 +735,18 @@ DPT_excludedItems_MM <- lsmeans::lsmeans(DPT_excludedItems_model, ~ timePoint_fa
 summary(rbind(pairs(DPT_excludedItems_MM, by="interventiongroup")[c(1,3,4,6)], pairs(DPT_excludedItems_MM, by="timePoint_factor")))
 ```
 
-# ```{r, cache = TRUE}
-# DPT_model <- lmer(DPT_quick_fixed ~ interventiongroup * timePoint_factor + (1|T1ParticipantID), data = filtered)
-# summary(DPT_model)
-# Anova(DPT_model, type = "III")
-# #summary(rbind(pairs(lsmeans::lsmeans(DPT_model, ~ interventiongroup * timePoint_factor), by = "timePoint_factor"))[2]) 
-# DPT_MM <- lsmeans::lsmeans(DPT_model, ~ timePoint_factor * interventiongroup)
-# summary(rbind(pairs(DPT_MM, by="interventiongroup")[c(1,3,4,6)], pairs(DPT_MM, by="timePoint_factor")))
-# ```
-
 ```{r, cache = TRUE}
 PTSD_T_model <- lmer(PTSD_T ~ interventiongroup * timePoint_factor + (1|Locationcode/T1ParticipantID), data = filtered)
 summary(PTSD_T_model)
 Anova(PTSD_T_model, type = "III")
 summary(rbind(pairs(lsmeans::lsmeans(PTSD_T_model, ~ interventiongroup * timePoint_factor), by = "timePoint_factor"))[2]) 
+```
+
+```{r, cache = TRUE}
+PTSD_avoid_T_model <- lmer(PTSD_avoid_T ~ interventiongroup * timePoint_factor + (1|Locationcode/T1ParticipantID), data = filtered)
+summary(PTSD_avoid_T_model)
+Anova(PTSD_avoid_T_model, type = "III")
+summary(rbind(pairs(lsmeans::lsmeans(PTSD_avoid_T_model, ~ interventiongroup * timePoint_factor), by = "timePoint_factor"))[2]) 
 ```
 
 ```{r, cache = TRUE}
@@ -1192,8 +1185,8 @@ relig_models[[4]] <- clmm(Relig4_T ~ interventiongroup * timePoint_factor + (1|L
 
 
 ```{r models}
-models <- list(PTSD_T_model, DPT_model, DPT_excludedItems_model, idioms1_T_model, idioms2_T_model, idioms3_T_model,DisMHmean_T_model, DisMH1AnxT_model, DisMH2DepT_model, DisMH3AvoidT_model, Funcmean_T_model, Depmean_T_model, Anxmean_T_model, Cope_T_model, SocCohmean_T_model, Fatalism_T_model, HelpGivingDisGen_T_model, HGDfuturedisprephelp_T_model, HGDfutureafterdishelp_T_model, HelpGivingMental_T_model, HGMHfuturehelp_T_model, HGMHskillshelp_T_model, HSDfuturehelp_T_model, HSMHfuturehelp_T_model, HSMHDistressfault_T_model, HSMHfuturehelp1god_T_model, HSMHfuturehelp2pastor_T_model, HSMHfuturehelp3voodoo_T_model, HSMHfuturehelp4neighbor_T_model, HSMHfuturehelp5familyfriend_T_model, HSMHfuturehelp6hospital_T_model, HSMHfuturehelp7MHworker_T_model,HSMHfuturehelp8other_T_model,DisAtNatural_mean_T_model, DisAtGodswill_mean_T_model,  DisAtVoodoo_mean_T_model, DisAtBadluck_mean_T_model, DisAtFaultHaitians_mean_T_model, DisAtHumanmade_mean_T_model, DisAtEQ1natural_T_model, DisAtEQ2godswill_T_model,DisAtEQ3voodoo_T_model,DisAtEQ4Badluck_T_model,DisAtEQ5faultHaitians_T_model,DisAtEQ6humanmade_T_model,DisAtflood1natural_T_model,DisAtflood2godswill_T_model,DisAtflood3voodoo_T_model,DisAtflood4badluck_T_model,DisAtflood5faulthaitians_T_model,DisAtflood6humanmade_T_model,DisAtpeople1natural_T_model,DisAtpeople2godswill_T_model,DisAtpeople4badluck_T_model,DisAtpeople5faulthaitians_T_model,DisAtpeople6humanmade_T_model)
-dv_names <- c('PTSD', 'Disaster preparedness','DP - excluded items', 'Idioms 1 - loss control','Idioms 2 - many things on mind','Idioms 3 - sadness pity','Disaster-related mental health', 'Dis MH - anxiety', 'Dis MH - depressed', 'Dis MH - avoid', 'Functioning', 'Depression - ZLSI', 'Anxiety - BAI', 'Coping', 'Social cohesion', 'Fatalism', 'HG Dis Gen sum', 'HG Dis - future dis prep help', 'HG Dis - future after dis help', 'HG MH Sum', 'HG MH - future help', 'HG MH - have skills to help', 'HS Dis - future help', 'HS MH - future help','HS MH - distress fault', 'HSMH - from God', 'HSMH - from pastor', 'HSMH - from voodoo', 'HSMH - from neighbor', 'HSMH - from family or fnd',  'HSMH - from hospital', 'HSMH - from MH worker', 'HSMH - from other', "Dis attr mean - natural", "Dis attr mean - God's will", "Dis attr mean - voodoo", "Dis attr mean - bad luck", "Dis attr mean - fault Haitians", "Dis attr mean - human made", 'Dis attr - EQ - natural',"Dis attr - EQ - God's will",'Dis attr - EQ - voodoo','Dis attr - EQ - bad luck','Dis attr - EQ - fault Haitians', 'Dis attr - EQ - human made','Dis attr - Flood - natural',"Dis attr - Flood - God's will",'Dis attr - Flood - voodoo','Dis attr - Flood - bad luck', 'Dis attr - Flood - fault Haitians','Dis attr - Flood - human made','Dis attr - Killed - natural',"Dis attr - Killed - God's will",'Dis attr - Killed - bad luck','Dis attr - Killed - fault Haitians','Dis attr - Killed - human made')
+models <- list(PTSD_T_model, PTSD_avoid_T_model, DPT_model, DPT_excludedItems_model, idioms1_T_model, idioms2_T_model, idioms3_T_model,DisMHmean_T_model, DisMH1AnxT_model, DisMH2DepT_model, DisMH3AvoidT_model, Funcmean_T_model, Depmean_T_model, Anxmean_T_model, Cope_T_model, SocCohmean_T_model, Fatalism_T_model, HelpGivingDisGen_T_model, HGDfuturedisprephelp_T_model, HGDfutureafterdishelp_T_model, HelpGivingMental_T_model, HGMHfuturehelp_T_model, HGMHskillshelp_T_model, HSDfuturehelp_T_model, HSMHfuturehelp_T_model, HSMHDistressfault_T_model, HSMHfuturehelp1god_T_model, HSMHfuturehelp2pastor_T_model, HSMHfuturehelp3voodoo_T_model, HSMHfuturehelp4neighbor_T_model, HSMHfuturehelp5familyfriend_T_model, HSMHfuturehelp6hospital_T_model, HSMHfuturehelp7MHworker_T_model,HSMHfuturehelp8other_T_model,DisAtNatural_mean_T_model, DisAtGodswill_mean_T_model,  DisAtVoodoo_mean_T_model, DisAtBadluck_mean_T_model, DisAtFaultHaitians_mean_T_model, DisAtHumanmade_mean_T_model, DisAtEQ1natural_T_model, DisAtEQ2godswill_T_model,DisAtEQ3voodoo_T_model,DisAtEQ4Badluck_T_model,DisAtEQ5faultHaitians_T_model,DisAtEQ6humanmade_T_model,DisAtflood1natural_T_model,DisAtflood2godswill_T_model,DisAtflood3voodoo_T_model,DisAtflood4badluck_T_model,DisAtflood5faulthaitians_T_model,DisAtflood6humanmade_T_model,DisAtpeople1natural_T_model,DisAtpeople2godswill_T_model,DisAtpeople4badluck_T_model,DisAtpeople5faulthaitians_T_model,DisAtpeople6humanmade_T_model)
+dv_names <- c('PTSD', 'PTSD - avoidance items', 'Disaster preparedness','DP - excluded items', 'Idioms 1 - loss control','Idioms 2 - many things on mind','Idioms 3 - sadness pity','Disaster-related mental health', 'Dis MH - anxiety', 'Dis MH - depressed', 'Dis MH - avoid', 'Functioning', 'Depression - ZLSI', 'Anxiety - BAI', 'Coping', 'Social cohesion', 'Fatalism', 'HG Dis Gen sum', 'HG Dis - future dis prep help', 'HG Dis - future after dis help', 'HG MH Sum', 'HG MH - future help', 'HG MH - have skills to help', 'HS Dis - future help', 'HS MH - future help','HS MH - distress fault', 'HSMH - from God', 'HSMH - from pastor', 'HSMH - from voodoo', 'HSMH - from neighbor', 'HSMH - from family or fnd',  'HSMH - from hospital', 'HSMH - from MH worker', 'HSMH - from other', "Dis attr mean - natural", "Dis attr mean - God's will", "Dis attr mean - voodoo", "Dis attr mean - bad luck", "Dis attr mean - fault Haitians", "Dis attr mean - human made", 'Dis attr - EQ - natural',"Dis attr - EQ - God's will",'Dis attr - EQ - voodoo','Dis attr - EQ - bad luck','Dis attr - EQ - fault Haitians', 'Dis attr - EQ - human made','Dis attr - Flood - natural',"Dis attr - Flood - God's will",'Dis attr - Flood - voodoo','Dis attr - Flood - bad luck', 'Dis attr - Flood - fault Haitians','Dis attr - Flood - human made','Dis attr - Killed - natural',"Dis attr - Killed - God's will",'Dis attr - Killed - bad luck','Dis attr - Killed - fault Haitians','Dis attr - Killed - human made')
 models_t2t3 <- list(HGMHhelpedsomeonerecentflood_T2_model, HSDpasthelp_T_model, HSDpasthelp_T_ME_model, SocCoh3floodreceivedhelp_T2_model, SocCoh3disprepreceivedhelp_T3_model, HSMHfloodsadness_T_model, HSMHfloodsadness_T_ME_model, HSMHpasthelp_T_model, HSMHpasthelp_T_ME_model)
 dv_names_t2t3 <- c('HG MH - helped someone recent flood - T2', 'HS Dis - past help - T2 T3', 'HS Dis - past help - T2 T3 ME', 'SocCoh - flood received help - T2', 'SocCoh - dis prep resp received help - T3', 'HS MH - flood sadness - T2 T3', 'HS MH - flood sadness - T2 T3 ME', 'HS MH - past help - T2 T3', 'HS MH - past help - T2 T3 ME')
 
